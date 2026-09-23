@@ -21,8 +21,13 @@ public record AppConfig(
 
     @AssertTrue(message = "sourceDir and archiveDir must be different directories")
     public boolean isSourceAndArchiveDirectoriesDifferent() {
-        return sourceDir == null || archiveDir == null || sourceDir.isBlank() || archiveDir.isBlank()
-                || !Path.of(sourceDir).toAbsolutePath().normalize()
-                .equals(Path.of(archiveDir).toAbsolutePath().normalize());
+        if (sourceDir == null || sourceDir.isBlank()
+                || archiveDir == null || archiveDir.isBlank()) {
+            return true;
+        }
+
+        Path normalizedSource = Path.of(sourceDir).toAbsolutePath().normalize();
+        Path normalizedArchive = Path.of(archiveDir).toAbsolutePath().normalize();
+        return !normalizedSource.equals(normalizedArchive);
     }
 }
