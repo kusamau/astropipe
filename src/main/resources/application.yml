@@ -1,0 +1,23 @@
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    url: jdbc:sqlite:./data/archive.db
+    hikari:
+      maximum-pool-size: 2
+      data-source-properties:
+        busy_timeout: 5000
+        synchronous: NORMAL
+
+astropipe:
+  source-dir: ./data/source
+  archive-dir: ./data/archive
+  watch:
+    reconciliation-interval-seconds: 30
+  stability:
+    enabled: true
+    poll-interval-millis: 250
+    consecutive-stable-checks: 2
+  workers:
+    pool-size: 2
+    queue-capacity: 10000
