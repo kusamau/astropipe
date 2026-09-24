@@ -43,13 +43,13 @@ BUILD SUCCESS
 | `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
 | `SatelliteImageNameTest` | 9 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
 | `ArchivePathResolverTest` | 2 | Zero-padded hierarchy, creation, year boundary |
-| `FileMoverTest` | 4 | Ranged append, atomic publish, overlap mismatch, truncation to checkpoint, reset when staging is short |
+| `FileMoverTest` | 4 | Ranged append, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
 | `SourceDetectorTest` | 5 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close |
-| `ArchiveRepositoryIT` | 7 | Dedupe key, archive bookkeeping, state transitions, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
-| `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication returned to staging, resumable source kept, three unrecoverable crash shapes failed |
-| `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, reconciliation-only fallback, overlap mismatch, resume from checkpoint |
+| `ArchiveRepositoryIT` | 7 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
+| `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
+| `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |
 
 ## Manual end-to-end test cases
 
@@ -153,8 +153,35 @@ INFO  [main] io.astropipe.Main - Shutdown complete
 `data/archive.db-wal` and `data/archive.db-shm` were removed on exit, leaving
 only `data/archive.db`.
 
+### M8 — Crash mid-copy recovers by copying again
+
+1. Write a 40 MB image into `data/source` in place, one megabyte at a time.
+2. Once staging passes 5 MB, `kill -9` the JVM: a crash with no clean shutdown.
+3. Let the writer finish, then restart Astropipe.
+
+**Expected:** the incremental copy runs while the producer writes; after the
+crash the stale staging file is discarded, the image is copied again from the
+start, and the archived bytes match the source exactly.
+**Observed:** pass.
+
+```
+Staged file=SAT_IMG_...raw copiedBytes=3145728  appendedBytes=3145728
+Staged file=SAT_IMG_...raw copiedBytes=4194304  appendedBytes=1048576
+Staged file=SAT_IMG_...raw copiedBytes=5242880  appendedBytes=1048576
+        <SIGKILL; ledger row left IN_PROGRESS, staging left on disk>
+ArchiveReconciler - Source survives and will be copied again from the start: SAT_IMG_...raw
+Startup reconciliation: archived=0 resumable=1 failed=0
+Staged file=SAT_IMG_...raw copiedBytes=41943040 appendedBytes=41943040
+Archived file=SAT_IMG_...raw bytes=41943040 durationMs=4
+```
+
+MD5 of source and of the archived copy: `4502163cc345866f84ac377adc3526e6`.
+
 ## Known gaps
 
+- An image interrupted mid-copy is copied again from the beginning on restart.
+  This is deliberate (see README), but it is worth measuring before pointing
+  Astropipe at files where a re-copy would be expensive.
 - Performance has not been measured against multi-gigabyte images or a saturated
   device; `durationMs` is logged per file so a campaign can be run without code
   changes.

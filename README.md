@@ -36,7 +36,6 @@ required; anything else falls back to the default shown here.
 
   "pollIntervalMillis": 250,
   "quietPeriodMillis": 250,
-  "resumeOverlapBytes": 65536,
   "reconciliationIntervalSeconds": 30,
 
   "workerPoolSize": 2,
@@ -51,7 +50,6 @@ required; anything else falls back to the default shown here.
 | `databaseUrl` | JDBC URL of the SQLite ledger. |
 | `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
 | `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
-| `resumeOverlapBytes` | Bytes re-validated against staging before appending more. |
 | `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. |
 | `workerPoolSize` / `workerQueueCapacity` | Copy and publication thread pool. |
 
@@ -93,15 +91,21 @@ See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
 
 Astropipe is optimized for very large append-only files whose source and archive
 normally live on different filesystems. Copying begins as soon as a file is
-detected instead of waiting for the producer to finish. Available bytes are
-written to `<destination>.tmp` on the archive filesystem and the durable byte
-count is checkpointed in SQLite after `FileChannel.force(true)`.
+detected instead of waiting for the producer to finish: available bytes are
+written to `<destination>.tmp` on the archive filesystem, and each time the
+source grows the new bytes are appended. A slow producer therefore overlaps its
+writing with Astropipe's copying rather than being copied only after it stops.
 
-When the source grows, Astropipe validates the last `resumeOverlapBytes` against
-staging byte-for-byte before appending new bytes. This detects a broken resume
-boundary without rereading the entire large file. A different overlap, a source
-shrink, or a replacement violates the producer contract; the row becomes
-`FAILED` and both artifacts are preserved for inspection.
+**Staging is valid only for the run that created it.** A restart discards
+whatever a previous attempt left behind and copies again from the beginning.
+That is the deliberate trade behind this design: it removes the persisted
+checkpoint, the byte-for-byte resume-boundary validation and the two-phase copy
+state, at the cost of re-copying a large file that was interrupted mid-transfer.
+The source is the only authority, and it is never removed until its image has
+been published.
+
+A source that loses bytes it has already handed over violates the append-only
+contract; the row becomes `FAILED` and both artifacts are preserved.
 
 ### Detection and complete files
 
@@ -125,21 +129,21 @@ final destination and remove the source.
 ### Correctness under failure
 
 The SQLite primary key on `file_name` is the authoritative deduplication guard:
-a name that is already `ARCHIVED` or `FAILED` is never processed again.
-Processing cycles between `COPYING` and `STAGING` — `COPYING` means overlap
-validation or transfer is active, `STAGING` means the durable copy has caught up
-and is waiting for quiet. Publication sets `ARCHIVED` along with the saved time
-and saved folder; contract violations and unrecoverable I/O errors set `FAILED`.
+a name that is already `ARCHIVED` or `FAILED` is never processed again. A row is
+`IN_PROGRESS` from the moment the file is claimed until publication sets
+`ARCHIVED` along with the saved time and saved folder, or a contract violation or
+unrecoverable I/O error sets `FAILED`. Copy progress is deliberately not
+recorded, because no staging file outlives the process that wrote it.
 
-`copied_bytes` advances only after staging is forced. On restart,
-`ArchiveReconciler` compares every in-progress row against the filesystem:
-bytes beyond the checkpoint are truncated and transfer resumes after validating
-the overlap, and a published destination is finalized or returned to staging
-according to its size relative to the append-only source. Temporary files are
-durable recovery state and are never removed by a blanket startup cleanup.
+On restart, `ArchiveReconciler` compares every in-progress row against the
+filesystem. A surviving source is the authority: any staging file is deleted, and
+a published destination shorter than its source is deleted too rather than leave
+a truncated image under a complete name. The row stays in progress and the image
+is copied again. Only a fully published destination, a source that shrank, or the
+loss of both copies is terminal.
 
-Schema version 2 is required. A database created by the earlier `PENDING` state
-model is rejected with an explicit request to create a fresh database.
+Schema version 3 is required. A database created by an earlier state model is
+rejected with an explicit request to create a fresh database.
 
 SQLite runs in WAL mode with `synchronous=NORMAL` on a single connection, which
 serialises the handful of tiny statements the pipeline issues — all SQLite would
@@ -159,7 +163,8 @@ archive devices; both pool size and queue capacity are configurable.
 ## What I deliberately did not build
 
 - Distributed coordination: the exercise targets one local process and disk.
-- Full-file checksums: resume validation intentionally reads only the configured overlap.
+- Resuming an interrupted copy across a restart: recopying from the source is simpler and the source is still there.
+- Full-file checksums: the append-only contract plus an atomic publish is the integrity story.
 - Automatic retries: failed rows stay explicit rather than hiding policy in a backoff loop.
 - A metrics endpoint: logs and `VALIDATION.md` are sufficient here.
 - A framework: the application is plain Java over `java.nio`, JDBC and Jackson.

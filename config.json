@@ -5,7 +5,6 @@
 
   "pollIntervalMillis": 250,
   "quietPeriodMillis": 250,
-  "resumeOverlapBytes": 65536,
   "reconciliationIntervalSeconds": 30,
 
   "workerPoolSize": 2,

@@ -92,18 +92,17 @@ final class SourceWatcher implements AutoCloseable {
         }
         if (!inFlight.add(source)) return;
 
-        ArchiveRepository.CopyRecord record;
+        ArchiveRepository.Status status;
         try {
-            record = repository.beginOrResume(fileName, Instant.now());
+            status = repository.claim(fileName, Instant.now());
         } catch (RuntimeException e) {
             inFlight.remove(source);
             logger.error("Could not claim file={} in the archive ledger", fileName, e);
             return;
         }
-        if (record.terminal()) {
+        if (status.terminal()) {
             inFlight.remove(source);
-            logger.debug("Ignoring terminal file={} status={} detectedBy={}",
-                    fileName, record.status(), reason);
+            logger.debug("Ignoring terminal file={} status={} detectedBy={}", fileName, status, reason);
             return;
         }
 
@@ -111,19 +110,15 @@ final class SourceWatcher implements AutoCloseable {
         try {
             Path destination = pathResolver.resolve(fileName, timestamp);
             Path staging = fileMover.stagingPath(destination);
-            long checkpoint = fileMover.normalizeStaging(staging, record.copiedBytes());
-            if (checkpoint != record.copiedBytes()) repository.resetCheckpoint(fileName);
+            fileMover.createStaging(staging);
 
-            StabilityDetector.Snapshot snapshot = stabilityDetector.sample(source);
-            requireNoShrink(source, snapshot.size(), checkpoint);
-
-            Candidate candidate = new Candidate(source, fileName, destination, staging, checkpoint);
+            Candidate candidate = new Candidate(source, fileName, destination, staging);
             candidates.put(source, candidate);
-            logger.info("Detected file={} detectedBy={} checkpoint={}", fileName, reason, checkpoint);
-            if (snapshot.size() > checkpoint) {
+            logger.info("Detected file={} detectedBy={}", fileName, reason);
+            StabilityDetector.Snapshot snapshot = stabilityDetector.sample(source);
+            if (snapshot.size() > 0) {
                 submit(candidate, this::copyAvailable);
             } else {
-                repository.markStaging(fileName, checkpoint);
                 candidate.markQuietFrom(snapshot);
                 scheduleCheck(candidate, config.pollIntervalMillis());
             }
@@ -150,30 +145,18 @@ final class SourceWatcher implements AutoCloseable {
         StabilityDetector.Snapshot afterCopy = null;
         boolean copied = false;
         try {
-            repository.markCopying(candidate.fileName);
-            long normalizedCheckpoint = fileMover.normalizeStaging(candidate.staging, candidate.checkpoint);
-            if (normalizedCheckpoint != candidate.checkpoint) {
-                repository.resetCheckpoint(candidate.fileName);
-                candidate.checkpoint = 0;
-            }
-
             StabilityDetector.Snapshot beforeCopy = stabilityDetector.sample(candidate.source);
-            long checkpoint = candidate.checkpoint;
-            requireNoShrink(candidate.source, beforeCopy.size(), checkpoint);
-            if (checkpoint > 0) {
-                long resumeOffset = Math.max(0, checkpoint - config.resumeOverlapBytes());
-                fileMover.validateOverlap(candidate.source, candidate.staging, resumeOffset, checkpoint);
-            }
+            long copiedSoFar = candidate.copiedBytes;
+            requireNoShrink(candidate.source, beforeCopy.size(), copiedSoFar);
 
             long copiedBytes = fileMover.appendRange(
-                    candidate.source, candidate.staging, checkpoint, beforeCopy.size());
-            repository.markStaging(candidate.fileName, copiedBytes);
-            candidate.checkpoint = copiedBytes;
+                    candidate.source, candidate.staging, copiedSoFar, beforeCopy.size());
+            candidate.copiedBytes = copiedBytes;
             afterCopy = stabilityDetector.sample(candidate.source);
             candidate.markQuietFrom(afterCopy);
             copied = true;
             logger.info("Staged file={} copiedBytes={} appendedBytes={}",
-                    candidate.fileName, copiedBytes, copiedBytes - checkpoint);
+                    candidate.fileName, copiedBytes, copiedBytes - copiedSoFar);
         } catch (Exception failure) {
             fail(candidate, failure);
         } finally {
@@ -181,7 +164,7 @@ final class SourceWatcher implements AutoCloseable {
         }
 
         if (!copied || !running.get() || !candidates.containsKey(candidate.source)) return;
-        if (afterCopy.size() > candidate.checkpoint) {
+        if (afterCopy.size() > candidate.copiedBytes) {
             submit(candidate, this::copyAvailable);
         } else {
             scheduleCheck(candidate, config.pollIntervalMillis());
@@ -206,8 +189,8 @@ final class SourceWatcher implements AutoCloseable {
         }
         try {
             StabilityDetector.Snapshot current = stabilityDetector.sample(candidate.source);
-            requireNoShrink(candidate.source, current.size(), candidate.checkpoint);
-            if (current.size() > candidate.checkpoint) {
+            requireNoShrink(candidate.source, current.size(), candidate.copiedBytes);
+            if (current.size() > candidate.copiedBytes) {
                 submit(candidate, this::copyAvailable);
                 return;
             }
@@ -231,7 +214,7 @@ final class SourceWatcher implements AutoCloseable {
         long started = System.nanoTime();
         try {
             StabilityDetector.Snapshot beforePublish = stabilityDetector.sample(candidate.source);
-            if (beforePublish.size() != candidate.checkpoint
+            if (beforePublish.size() != candidate.copiedBytes
                     || !stabilityDetector.unchanged(candidate.stagedSnapshot, beforePublish)) {
                 candidate.markQuietFrom(beforePublish);
                 retry = true;
@@ -257,7 +240,7 @@ final class SourceWatcher implements AutoCloseable {
                         candidate.fileName, databaseFailure);
             }
             logger.info("Archived file={} destination={} bytes={} durationMs={}",
-                    candidate.fileName, candidate.destination, candidate.checkpoint,
+                    candidate.fileName, candidate.destination, candidate.copiedBytes,
                     (System.nanoTime() - started) / 1_000_000);
             discard(candidate);
         } catch (Exception failure) {
@@ -272,7 +255,7 @@ final class SourceWatcher implements AutoCloseable {
         } finally {
             candidate.workScheduled.set(false);
             if (retry && running.get() && candidates.containsKey(candidate.source)) {
-                if (candidate.stagedSnapshot.size() > candidate.checkpoint) {
+                if (candidate.stagedSnapshot.size() > candidate.copiedBytes) {
                     submit(candidate, this::copyAvailable);
                 } else {
                     scheduleCheck(candidate, config.pollIntervalMillis());
@@ -302,10 +285,10 @@ final class SourceWatcher implements AutoCloseable {
         inFlight.remove(candidate.source);
     }
 
-    private static void requireNoShrink(Path source, long sourceSize, long checkpoint) throws IOException {
-        if (sourceSize < checkpoint) {
-            throw new IOException("Append-only source shrank below checkpoint for " + source
-                    + ": sourceSize=" + sourceSize + " checkpoint=" + checkpoint);
+    private static void requireNoShrink(Path source, long sourceSize, long copiedBytes) throws IOException {
+        if (sourceSize < copiedBytes) {
+            throw new IOException("Append-only source shrank below what was already copied for " + source
+                    + ": sourceSize=" + sourceSize + " copiedBytes=" + copiedBytes);
         }
     }
 
@@ -316,16 +299,16 @@ final class SourceWatcher implements AutoCloseable {
         private final Path staging;
         private final AtomicBoolean workScheduled = new AtomicBoolean();
         private final AtomicBoolean checkScheduled = new AtomicBoolean();
-        private volatile long checkpoint;
+        /** In-memory only: staging is discarded on restart, so this never outlives the run. */
+        private volatile long copiedBytes;
         private volatile StabilityDetector.Snapshot stagedSnapshot;
         private volatile long quietSinceNanos;
 
-        private Candidate(Path source, String fileName, Path destination, Path staging, long checkpoint) {
+        private Candidate(Path source, String fileName, Path destination, Path staging) {
             this.source = source;
             this.fileName = fileName;
             this.destination = destination;
             this.staging = staging;
-            this.checkpoint = checkpoint;
         }
 
         /** Restarts the quiet period from this observation of the source. */

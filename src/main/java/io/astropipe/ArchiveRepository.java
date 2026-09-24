@@ -15,11 +15,15 @@ import java.util.List;
  * The archive ledger. Its primary key on {@code file_name} is the authoritative guard
  * against processing the same image twice.
  *
+ * <p>A row is {@code IN_PROGRESS} from the moment the file is claimed until it is either
+ * {@code ARCHIVED} or {@code FAILED}. Copy progress is deliberately not recorded: staging
+ * never survives a restart, so there is no checkpoint worth persisting.
+ *
  * <p>A single connection serialises the handful of tiny statements the pipeline issues,
  * which is all SQLite would allow concurrently anyway.
  */
 final class ArchiveRepository implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 2;
+    private static final int SCHEMA_VERSION = 3;
 
     private final Connection connection;
 
@@ -46,8 +50,7 @@ final class ArchiveRepository implements AutoCloseable {
         execute("""
                 CREATE TABLE IF NOT EXISTS archived_file (
                     file_name     TEXT PRIMARY KEY,
-                    status        TEXT NOT NULL CHECK (status IN ('COPYING', 'STAGING', 'ARCHIVED', 'FAILED')),
-                    copied_bytes  INTEGER NOT NULL DEFAULT 0 CHECK (copied_bytes >= 0),
+                    status        TEXT NOT NULL CHECK (status IN ('IN_PROGRESS', 'ARCHIVED', 'FAILED')),
                     archive_dir   TEXT,
                     saved_at      TEXT,
                     first_seen_at TEXT NOT NULL
@@ -58,41 +61,27 @@ final class ArchiveRepository implements AutoCloseable {
     }
 
     /** Claims the file, or reports the state a previous run left it in. */
-    synchronized CopyRecord beginOrResume(String fileName, Instant firstSeenAt) {
+    synchronized Status claim(String fileName, Instant firstSeenAt) {
         update("""
                 INSERT OR IGNORE INTO archived_file
-                    (file_name, status, copied_bytes, archive_dir, saved_at, first_seen_at)
-                VALUES (?, 'COPYING', 0, NULL, NULL, ?)
+                    (file_name, status, archive_dir, saved_at, first_seen_at)
+                VALUES (?, 'IN_PROGRESS', NULL, NULL, ?)
                 """, fileName, firstSeenAt.toString());
-        return queryOne("SELECT status, copied_bytes FROM archived_file WHERE file_name = ?",
-                row -> new CopyRecord(Status.valueOf(row.getString(1)), row.getLong(2)),
-                fileName);
-    }
-
-    synchronized void markCopying(String fileName) {
-        transition(fileName, "COPYING", null);
-    }
-
-    synchronized void markStaging(String fileName, long copiedBytes) {
-        transition(fileName, "STAGING", copiedBytes);
-    }
-
-    synchronized void resetCheckpoint(String fileName) {
-        transition(fileName, "COPYING", 0L);
+        return queryOne("SELECT status FROM archived_file WHERE file_name = ?",
+                row -> Status.valueOf(row.getString(1)), fileName);
     }
 
     synchronized void markArchived(String fileName, Path archiveDirectory, Instant savedAt) {
         int affected = update("""
                 UPDATE archived_file SET status = 'ARCHIVED', archive_dir = ?, saved_at = ?
-                WHERE file_name = ? AND status IN ('COPYING', 'STAGING')
+                WHERE file_name = ? AND status = 'IN_PROGRESS'
                 """, archiveDirectory.toString(), savedAt.toString(), fileName);
         requireOneRow(affected, fileName, "ARCHIVED");
     }
 
     synchronized void markFailed(String fileName) {
         int affected = update("""
-                UPDATE archived_file SET status = 'FAILED'
-                WHERE file_name = ? AND status IN ('COPYING', 'STAGING')
+                UPDATE archived_file SET status = 'FAILED' WHERE file_name = ? AND status = 'IN_PROGRESS'
                 """, fileName);
         requireOneRow(affected, fileName, "FAILED");
     }
@@ -102,12 +91,10 @@ final class ArchiveRepository implements AutoCloseable {
         return queryOne("PRAGMA " + name, row -> row.getInt(1));
     }
 
-    /** Rows a previous run left mid-flight, for {@link ArchiveReconciler} to resolve. */
-    synchronized List<CopyEntry> activeEntries() {
-        return queryList("""
-                SELECT file_name, copied_bytes FROM archived_file
-                WHERE status IN ('COPYING', 'STAGING')
-                """, row -> new CopyEntry(row.getString(1), row.getLong(2)));
+    /** Names a previous run left mid-flight, for {@link ArchiveReconciler} to resolve. */
+    synchronized List<String> inProgressFileNames() {
+        return queryList("SELECT file_name FROM archived_file WHERE status = 'IN_PROGRESS'",
+                row -> row.getString(1));
     }
 
     @Override
@@ -119,23 +106,10 @@ final class ArchiveRepository implements AutoCloseable {
         }
     }
 
-    private void transition(String fileName, String status, Long copiedBytes) {
-        int affected = copiedBytes == null
-                ? update("""
-                        UPDATE archived_file SET status = ?
-                        WHERE file_name = ? AND status IN ('COPYING', 'STAGING')
-                        """, status, fileName)
-                : update("""
-                        UPDATE archived_file SET status = ?, copied_bytes = ?
-                        WHERE file_name = ? AND status IN ('COPYING', 'STAGING')
-                        """, status, copiedBytes, fileName);
-        requireOneRow(affected, fileName, status);
-    }
-
     private static void requireOneRow(int affected, String fileName, String transition) {
         if (affected != 1) {
             throw new DatabaseException("Could not transition " + fileName + " to " + transition
-                    + "; expected one active row but updated " + affected);
+                    + "; expected one in-progress row but updated " + affected);
         }
     }
 
@@ -186,15 +160,13 @@ final class ArchiveRepository implements AutoCloseable {
         T map(ResultSet row) throws SQLException;
     }
 
-    enum Status { COPYING, STAGING, ARCHIVED, FAILED }
+    enum Status {
+        IN_PROGRESS, ARCHIVED, FAILED;
 
-    record CopyRecord(Status status, long copiedBytes) {
         boolean terminal() {
-            return status == Status.ARCHIVED || status == Status.FAILED;
+            return this != IN_PROGRESS;
         }
     }
-
-    record CopyEntry(String fileName, long copiedBytes) { }
 
     static final class DatabaseException extends RuntimeException {
         DatabaseException(String message) {

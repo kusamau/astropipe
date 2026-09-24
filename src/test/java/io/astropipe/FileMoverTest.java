@@ -5,7 +5,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -16,54 +15,53 @@ class FileMoverTest {
     @TempDir
     Path temporaryDirectory;
 
+    private final FileMover mover = new FileMover();
+
     @Test
     void appendsOnlyTheRequestedRangeAndPublishesAtomically() throws Exception {
-        Path source = temporaryDirectory.resolve("source.raw");
+        Path source = Files.writeString(temporaryDirectory.resolve("source.raw"), "abcdefgh");
         Path destination = temporaryDirectory.resolve("archive.raw");
-        FileMover mover = new FileMover();
         Path staging = mover.stagingPath(destination);
-        Files.writeString(source, "abcdefgh");
+        mover.createStaging(staging);
 
-        assertEquals(0, mover.normalizeStaging(staging, 0));
         assertEquals(4, mover.appendRange(source, staging, 0, 4));
-        mover.validateOverlap(source, staging, 2, 4);
+        assertEquals("abcd", Files.readString(staging));
         assertEquals(8, mover.appendRange(source, staging, 4, 8));
         mover.publish(staging, destination);
 
         assertEquals("abcdefgh", Files.readString(destination));
-        assertTrue(Files.exists(source));
+        assertTrue(Files.exists(source), "publishing does not remove the source");
         assertFalse(Files.exists(staging));
     }
 
     @Test
-    void detectsOverlapMismatchBeforeAppending() throws Exception {
-        Path source = temporaryDirectory.resolve("source.raw");
-        Path staging = temporaryDirectory.resolve("archive.raw.tmp");
-        Files.writeString(source, "abcdefgh");
-        Files.writeString(staging, "abcX");
+    void startsStagingEmptyEvenWhenAPreviousAttemptLeftBytes() throws Exception {
+        Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "stale");
 
-        assertThrows(FileMover.OverlapMismatchException.class,
-                () -> new FileMover().validateOverlap(source, staging, 0, 4));
-        assertEquals("abcX", Files.readString(staging));
-    }
-
-    @Test
-    void truncatesOnlyBytesBeyondTheDurableCheckpoint() throws Exception {
-        Path staging = temporaryDirectory.resolve("archive.raw.tmp");
-        Files.writeString(staging, "abcdefgh");
-
-        assertEquals(4, new FileMover().normalizeStaging(staging, 4));
-
-        assertEquals("abcd", Files.readString(staging));
-    }
-
-    @Test
-    void resetsStagingWhenItIsShorterThanTheCheckpoint() throws Exception {
-        Path staging = temporaryDirectory.resolve("archive.raw.tmp");
-        Files.writeString(staging, "abc", StandardOpenOption.CREATE_NEW);
-
-        assertEquals(0, new FileMover().normalizeStaging(staging, 4));
+        mover.createStaging(staging);
 
         assertEquals(0, Files.size(staging));
+    }
+
+    @Test
+    void refusesToAppendAtAnOffsetThatDoesNotMatchStaging() throws Exception {
+        Path source = Files.writeString(temporaryDirectory.resolve("source.raw"), "abcdefgh");
+        Path staging = temporaryDirectory.resolve("archive.raw.tmp");
+        mover.createStaging(staging);
+
+        assertThrows(java.io.IOException.class, () -> mover.appendRange(source, staging, 4, 8));
+    }
+
+    @Test
+    void refusesToPublishOverAnExistingDestinationAndRollsBack() throws Exception {
+        Path destination = Files.writeString(temporaryDirectory.resolve("archive.raw"), "already there");
+        Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "new");
+
+        assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> mover.publish(staging, destination));
+
+        Files.delete(staging);
+        mover.rollbackPublication(destination, staging);
+        assertEquals("already there", Files.readString(staging));
+        assertFalse(Files.exists(destination));
     }
 }

@@ -17,7 +17,6 @@ public record Config(
         String databaseUrl,
         int pollIntervalMillis,
         int quietPeriodMillis,
-        int resumeOverlapBytes,
         int reconciliationIntervalSeconds,
         int workerPoolSize,
         int workerQueueCapacity) {
@@ -32,7 +31,6 @@ public record Config(
                 ? "jdbc:sqlite:./data/archive.db" : databaseUrl;
         pollIntervalMillis = positive(pollIntervalMillis, 250, "pollIntervalMillis");
         quietPeriodMillis = positive(quietPeriodMillis, 250, "quietPeriodMillis");
-        resumeOverlapBytes = positive(resumeOverlapBytes, 65_536, "resumeOverlapBytes");
         reconciliationIntervalSeconds = positive(reconciliationIntervalSeconds, 30, "reconciliationIntervalSeconds");
         workerPoolSize = positive(workerPoolSize, 2, "workerPoolSize");
         workerQueueCapacity = positive(workerQueueCapacity, 10_000, "workerQueueCapacity");

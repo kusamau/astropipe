@@ -33,7 +33,6 @@ class ConfigTest {
         assertEquals("jdbc:sqlite:./data/archive.db", config.databaseUrl());
         assertEquals(250, config.pollIntervalMillis());
         assertEquals(250, config.quietPeriodMillis());
-        assertEquals(65_536, config.resumeOverlapBytes());
         assertEquals(30, config.reconciliationIntervalSeconds());
         assertEquals(2, config.workerPoolSize());
         assertEquals(10_000, config.workerQueueCapacity());
@@ -46,7 +45,7 @@ class ConfigTest {
                 """);
 
         assertEquals(4, config.workerPoolSize());
-        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0, 0, 0).workerPoolSize());
+        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0, 0).workerPoolSize());
     }
 
     @Test

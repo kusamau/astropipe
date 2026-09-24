@@ -6,13 +6,15 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 
 /**
- * Resolves rows a previous run left in {@code COPYING} or {@code STAGING} by comparing
- * the ledger against what is actually on disk. Staging files are durable recovery state,
- * so nothing here deletes them on spec.
+ * Resolves rows a previous run left {@code IN_PROGRESS} by comparing the ledger against
+ * what is actually on disk.
+ *
+ * <p>Staging never survives a restart, so a surviving source file is the authority: any
+ * partial artifact is discarded and the image is copied again from the beginning. Only a
+ * published destination, or the loss of both copies, is terminal.
  */
 final class ArchiveReconciler {
     private static final Logger logger = LoggerFactory.getLogger(ArchiveReconciler.class);
@@ -37,8 +39,8 @@ final class ArchiveReconciler {
         int archived = 0;
         int resumable = 0;
         int failed = 0;
-        for (ArchiveRepository.CopyEntry entry : repository.activeEntries()) {
-            switch (resolve(entry)) {
+        for (String fileName : repository.inProgressFileNames()) {
+            switch (resolve(fileName)) {
                 case ARCHIVED -> archived++;
                 case RESUMABLE -> resumable++;
                 case FAILED -> failed++;
@@ -47,8 +49,7 @@ final class ArchiveReconciler {
         return new Result(archived, resumable, failed);
     }
 
-    private Outcome resolve(ArchiveRepository.CopyEntry entry) throws IOException {
-        String fileName = entry.fileName();
+    private Outcome resolve(String fileName) throws IOException {
         Path source = sourceDirectory.resolve(fileName);
         Path destination;
         try {
@@ -58,47 +59,38 @@ final class ArchiveReconciler {
             return fail(fileName);
         }
 
-        if (!Files.exists(destination)) {
-            if (Files.exists(source)) {
-                logger.info("Found resumable staged file: {} copiedBytes={}", fileName, entry.copiedBytes());
-                return Outcome.RESUMABLE;
-            }
-            logger.warn("In-progress file exists in neither source nor archive: {}", fileName);
-            return fail(fileName);
-        }
-
         if (!Files.exists(source)) {
-            return publishedWithoutSource(fileName, destination);
-        }
-
-        long sourceSize = Files.size(source);
-        long destinationSize = Files.size(destination);
-        if (sourceSize == destinationSize) {
-            Files.delete(source);
+            if (!Files.exists(destination)) {
+                logger.warn("In-progress file exists in neither source nor archive: {}", fileName);
+                return fail(fileName);
+            }
             repository.markArchived(fileName, destination.getParent(), Instant.now());
-            logger.info("Reconciled published file and removed source: {}", fileName);
+            logger.info("Reconciled published file as ARCHIVED: {}", fileName);
             return Outcome.ARCHIVED;
         }
-        if (sourceSize < destinationSize) {
-            logger.warn("Destination is larger than append-only source: {}", fileName);
-            return fail(fileName);
+
+        if (Files.exists(destination)) {
+            long sourceSize = Files.size(source);
+            long destinationSize = Files.size(destination);
+            if (sourceSize == destinationSize) {
+                Files.delete(source);
+                repository.markArchived(fileName, destination.getParent(), Instant.now());
+                logger.info("Reconciled published file and removed source: {}", fileName);
+                return Outcome.ARCHIVED;
+            }
+            if (destinationSize > sourceSize) {
+                logger.warn("Destination is larger than append-only source: {}", fileName);
+                return fail(fileName);
+            }
+            // A published file shorter than its source is incomplete. The source is intact,
+            // so discard it rather than leave a truncated image under a complete name.
+            Files.delete(destination);
+            logger.warn("Discarded an incomplete publication; it will be copied again: {}", fileName);
         }
 
-        Path staging = fileMover.stagingPath(destination);
-        if (Files.exists(staging)) {
-            logger.warn("Both destination and staging exist for in-progress file: {}", fileName);
-            return fail(fileName);
-        }
-        Files.move(destination, staging, StandardCopyOption.ATOMIC_MOVE);
-        repository.markStaging(fileName, destinationSize);
-        logger.info("Returned incomplete publication to staging: {}", fileName);
+        Files.deleteIfExists(fileMover.stagingPath(destination));
+        logger.info("Source survives and will be copied again from the start: {}", fileName);
         return Outcome.RESUMABLE;
-    }
-
-    private Outcome publishedWithoutSource(String fileName, Path destination) {
-        repository.markArchived(fileName, destination.getParent(), Instant.now());
-        logger.info("Reconciled published file as ARCHIVED: {}", fileName);
-        return Outcome.ARCHIVED;
     }
 
     private Outcome fail(String fileName) {

@@ -21,6 +21,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,14 +49,13 @@ class ArchiverIT {
     }
 
     /** The pipeline settings the watcher reads, tuned down so tests stay fast. */
-    private static Config config(int pollMillis, int quietMillis, int overlapBytes) {
-        return new Config("source", "archive", null, pollMillis, quietMillis, overlapBytes, 1, 2, 100);
+    private static Config config(int pollMillis, int quietMillis) {
+        return new Config("source", "archive", null, pollMillis, quietMillis, 1, 2, 100);
     }
 
     @Test
     void archivesStartupAndWatchEventsAndIgnoresMalformedFiles() throws Exception {
-        Fixture fixture = startFixture(10, 50, 4,
-                "SAT_IMG_20211231235959999.raw");
+        Fixture fixture = startFixture(10, 50, "SAT_IMG_20211231235959999.raw");
         Path startupDestination = fixture.archive.resolve(
                 "2021/12/31/SAT_IMG_20211231235959999.raw");
         await(() -> Files.exists(startupDestination), Duration.ofSeconds(5));
@@ -74,7 +74,7 @@ class ArchiverIT {
 
     @Test
     void doesNotMoveFileWhileUnsafeGeneratorIsStillWriting() throws Exception {
-        Fixture fixture = startFixture(50, 250, 64 * 1024, null);
+        Fixture fixture = startFixture(50, 250, null);
         String fileName = "SAT_IMG_20240229120000000.raw";
         Path source = fixture.source.resolve(fileName);
         Path destination = fixture.archive.resolve("2024/02/29").resolve(fileName);
@@ -117,54 +117,46 @@ class ArchiverIT {
     }
 
     @Test
-    void failsWithoutAppendingWhenTheResumeOverlapDiffers() throws Exception {
-        Fixture fixture = startFixture(25, 2_000, 4, null);
+    void failsAndKeepsBothArtifactsWhenTheSourceShrinks() throws Exception {
+        Fixture fixture = startFixture(25, 2_000, null);
         String fileName = "SAT_IMG_20240301120000000.raw";
         Path source = Files.writeString(fixture.source.resolve(fileName), "abcdefgh");
         Path destination = fixture.archive.resolve("2024/03/01").resolve(fileName);
         Path staging = destination.resolveSibling(fileName + ".tmp");
         await(() -> Files.exists(staging) && Files.size(staging) == 8, Duration.ofSeconds(5));
 
-        Files.writeString(staging, "abcdefXh", StandardOpenOption.TRUNCATE_EXISTING);
-        Files.writeString(source, "ijkl", StandardOpenOption.APPEND);
+        // An append-only source may never lose bytes it has already handed over.
+        Files.writeString(source, "abcd", StandardOpenOption.TRUNCATE_EXISTING);
 
-        await(() -> fixture.repository.beginOrResume(fileName, Instant.now()).status()
-                == ArchiveRepository.Status.FAILED, Duration.ofSeconds(5));
+        await(() -> fixture.repository.claim(fileName, Instant.now()) == ArchiveRepository.Status.FAILED,
+                Duration.ofSeconds(5));
         assertTrue(Files.exists(source));
-        assertTrue(Files.exists(staging));
+        assertTrue(Files.exists(staging), "a failed transfer keeps its artifacts for inspection");
         assertFalse(Files.exists(destination));
-        assertTrue(Files.readString(staging).equals("abcdefXh"));
     }
 
     @Test
-    void resumesFromCheckpointAndDropsUncheckpointedTail() throws Exception {
+    void discardsStagingLeftByAPreviousRunAndCopiesFromTheStart() throws Exception {
         Path sourceDirectory = Files.createDirectory(temporaryDirectory.resolve("source"));
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         String fileName = "SAT_IMG_20240302120000000.raw";
         Path source = Files.writeString(sourceDirectory.resolve(fileName), "abcdefgh");
         ArchivePathResolver resolver = new ArchivePathResolver(archive);
         Path destination = resolver.resolve(fileName, SatelliteImageName.parse(fileName));
-        Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "abcdZZ");
+        // Staging from a dead run, holding bytes that never matched the source.
+        Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "ZZZZZZ");
 
         repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository.initialize();
-        repository.beginOrResume(fileName, Instant.now());
-        repository.markStaging(fileName, 4);
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
-                sourceDirectory,
-                config(25, 50, 4),
-                resolver,
-                new FileMover(),
-                repository,
-                workers,
-                scheduler);
+                sourceDirectory, config(25, 50), resolver, new FileMover(), repository, workers, scheduler);
         watcher.start();
 
         await(() -> Files.exists(destination), Duration.ofSeconds(5));
-        assertTrue(Files.readString(destination).equals("abcdefgh"));
+        assertEquals("abcdefgh", Files.readString(destination));
         assertFalse(Files.exists(source));
         assertFalse(Files.exists(staging));
     }
@@ -183,11 +175,7 @@ class ArchiverIT {
         }
     }
 
-    private Fixture startFixture(
-            int pollMillis,
-            int quietMillis,
-            int overlapBytes,
-            String startupFile) throws Exception {
+    private Fixture startFixture(int pollMillis, int quietMillis, String startupFile) throws Exception {
         Path source = Files.createDirectory(temporaryDirectory.resolve("source"));
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         if (startupFile != null) Files.writeString(source.resolve(startupFile), "startup");
@@ -199,7 +187,7 @@ class ArchiverIT {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
                 source,
-                config(pollMillis, quietMillis, overlapBytes),
+                config(pollMillis, quietMillis),
                 new ArchivePathResolver(archive),
                 new FileMover(),
                 repository,
@@ -223,7 +211,7 @@ class ArchiverIT {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
                 source,
-                config(50, 100, 4),
+                config(50, 100),
                 new ArchivePathResolver(archive),
                 new FileMover(),
                 repository,

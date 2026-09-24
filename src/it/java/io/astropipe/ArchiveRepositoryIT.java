@@ -14,6 +14,7 @@ import java.sql.Statement;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,12 +41,26 @@ class ArchiveRepositoryIT {
     void primaryKeyIsAuthoritativeDedupeGuard() throws Exception {
         String fileName = "SAT_IMG_20210714102730046.raw";
 
-        assertEquals(new ArchiveRepository.CopyRecord(ArchiveRepository.Status.COPYING, 0),
-                repository.beginOrResume(fileName, Instant.now()));
-        assertEquals(new ArchiveRepository.CopyRecord(ArchiveRepository.Status.COPYING, 0),
-                repository.beginOrResume(fileName, Instant.now()));
+        assertEquals(ArchiveRepository.Status.IN_PROGRESS, repository.claim(fileName, Instant.now()));
+        assertEquals(ArchiveRepository.Status.IN_PROGRESS, repository.claim(fileName, Instant.now()));
 
         assertEquals(1, queryInt("SELECT COUNT(*) FROM archived_file WHERE file_name = ?", fileName));
+    }
+
+    @Test
+    void reportsAnAlreadyFinishedNameAsTerminal() {
+        String archived = "SAT_IMG_20210714102730046.raw";
+        String failed = "SAT_IMG_20210714102730047.raw";
+        repository.claim(archived, Instant.now());
+        repository.claim(failed, Instant.now());
+        repository.markArchived(archived, temporaryDirectory, Instant.now());
+        repository.markFailed(failed);
+
+        assertEquals(ArchiveRepository.Status.ARCHIVED, repository.claim(archived, Instant.now()));
+        assertEquals(ArchiveRepository.Status.FAILED, repository.claim(failed, Instant.now()));
+        assertTrue(ArchiveRepository.Status.ARCHIVED.terminal());
+        assertTrue(ArchiveRepository.Status.FAILED.terminal());
+        assertFalse(ArchiveRepository.Status.IN_PROGRESS.terminal());
     }
 
     @Test
@@ -53,9 +68,8 @@ class ArchiveRepositoryIT {
         String fileName = "SAT_IMG_20210714102730046.raw";
         Path archiveDirectory = temporaryDirectory.resolve("archive/2021/07/14");
         Instant savedAt = Instant.parse("2021-07-14T10:30:00Z");
-        repository.beginOrResume(fileName, Instant.now());
+        repository.claim(fileName, Instant.now());
 
-        repository.markStaging(fileName, 8);
         repository.markArchived(fileName, archiveDirectory, savedAt);
 
         assertEquals("ARCHIVED", queryString("SELECT status FROM archived_file WHERE file_name = ?", fileName));
@@ -66,31 +80,14 @@ class ArchiveRepositoryIT {
     }
 
     @Test
-    void appliesCopyingStagingAndFailedTransitions() throws Exception {
-        String archived = "SAT_IMG_20210714102730046.raw";
-        String failed = "SAT_IMG_20210714102730047.raw";
-        repository.beginOrResume(archived, Instant.now());
-        repository.beginOrResume(failed, Instant.now());
-
-        repository.markStaging(archived, 4);
-        repository.markCopying(archived);
-        repository.markStaging(archived, 8);
-        repository.resetCheckpoint(archived);
-        repository.markFailed(failed);
-
-        assertEquals(0, queryInt("SELECT copied_bytes FROM archived_file WHERE file_name = ?", archived));
-        assertEquals("FAILED", queryString("SELECT status FROM archived_file WHERE file_name = ?", failed));
-    }
-
-    @Test
     void refusesToTransitionRowsThatAreAbsentOrAlreadyTerminal() {
         String missing = "SAT_IMG_20240101120000000.raw";
         ArchiveRepository.DatabaseException absent = assertThrows(
                 ArchiveRepository.DatabaseException.class, () -> repository.markFailed(missing));
-        assertTrue(absent.getMessage().contains("expected one active row but updated 0"));
+        assertTrue(absent.getMessage().contains("expected one in-progress row but updated 0"));
 
         String archived = "SAT_IMG_20240101120000001.raw";
-        repository.beginOrResume(archived, Instant.now());
+        repository.claim(archived, Instant.now());
         repository.markArchived(archived, temporaryDirectory, Instant.now());
 
         assertThrows(ArchiveRepository.DatabaseException.class, () -> repository.markFailed(archived));
@@ -100,12 +97,11 @@ class ArchiveRepositoryIT {
     void listsOnlyRowsLeftInProgress() {
         String active = "SAT_IMG_20240101120000000.raw";
         String done = "SAT_IMG_20240101120000001.raw";
-        repository.beginOrResume(active, Instant.now());
-        repository.beginOrResume(done, Instant.now());
-        repository.markStaging(active, 12);
+        repository.claim(active, Instant.now());
+        repository.claim(done, Instant.now());
         repository.markArchived(done, temporaryDirectory, Instant.now());
 
-        assertEquals(java.util.List.of(new ArchiveRepository.CopyEntry(active, 12)), repository.activeEntries());
+        assertEquals(java.util.List.of(active), repository.inProgressFileNames());
     }
 
     @Test
@@ -125,6 +121,7 @@ class ArchiveRepositoryIT {
                     CREATE TABLE archived_file (
                         file_name TEXT PRIMARY KEY,
                         status TEXT NOT NULL,
+                        copied_bytes INTEGER NOT NULL DEFAULT 0,
                         archive_dir TEXT,
                         saved_at TEXT,
                         first_seen_at TEXT NOT NULL
