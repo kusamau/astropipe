@@ -9,10 +9,8 @@ import java.nio.file.Path;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /** Entry point: load the JSON config, wire the pipeline, and run until interrupted. */
 public final class Main {
@@ -75,14 +73,16 @@ public final class Main {
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
         ThreadPoolExecutor workers = newWorkerPool(config);
-        ScheduledExecutorService scheduler =
-                Executors.newSingleThreadScheduledExecutor(namedThreads("reconciliation-"));
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofPlatform().name("reconciliation-", 1).factory());
         SourceWatcher watcher = new SourceWatcher(
                 sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler);
 
-        stopOnShutdownSignal(watcher);
         try {
             watcher.start();
+            // Only now can close() do anything: before start() it short-circuits, so a
+            // signal arriving here would have left a running watcher no hook could stop.
+            stopOnShutdownSignal(watcher);
             logger.info("Monitoring source directory={}", sourceDirectory);
             watcher.awaitTermination();
         } finally {
@@ -97,7 +97,7 @@ public final class Main {
                 0L,
                 TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(config.workerQueueCapacity()),
-                namedThreads("archive-worker-"),
+                Thread.ofPlatform().name("archive-worker-", 1).factory(),
                 new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
@@ -149,10 +149,5 @@ public final class Main {
             throw new IOException(setting + " directory must be readable and writable: " + directory);
         }
         return directory;
-    }
-
-    private static ThreadFactory namedThreads(String prefix) {
-        AtomicInteger sequence = new AtomicInteger();
-        return runnable -> new Thread(runnable, prefix + sequence.incrementAndGet());
     }
 }
