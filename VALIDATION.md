@@ -14,6 +14,14 @@ Timing is never asserted with a fixed sleep. Integration tests poll a condition
 until a deadline, and the pipeline is configured with short poll and quiet
 periods so the suite stays fast without becoming timing-dependent.
 
+Nor may a test depend on how quickly `WatchService` reports a new file. That is a
+property of the platform — instant on Linux, polled on macOS, and unreliable over
+bind mounts and network filesystems — and the periodic listing exists precisely
+because it cannot be relied on. A test that asserts on detection latency is
+testing the operating system. `doesNotMoveFileWhileUnsafeGeneratorIsStillWriting`
+therefore checks its invariant after every chunk the producer writes, rather than
+once at a fixed moment.
+
 ## Requirements coverage
 
 | Requirement | Verified by |

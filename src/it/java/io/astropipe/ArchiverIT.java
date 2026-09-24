@@ -19,14 +19,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiverIT {
+    private static final int CHUNK_SIZE = 64 * 1024;
+
     @TempDir
     Path temporaryDirectory;
 
@@ -75,31 +77,46 @@ class ArchiverIT {
 
     @Test
     void doesNotMoveFileWhileUnsafeGeneratorIsStillWriting() throws Exception {
-        Fixture fixture = startFixture(50, 250, null);
+        // A long quiet period so that a scheduling hiccup cannot be mistaken for the
+        // producer having stopped, and a write long enough to outlast detection. How
+        // quickly WatchService reports a new file is a property of the platform - it is
+        // instant on Linux and polled on macOS - so nothing here may depend on it.
+        Fixture fixture = startFixture(50, 800, null);
         String fileName = "SAT_IMG_20240229120000000.raw";
         Path source = fixture.source.resolve(fileName);
         Path destination = fixture.archive.resolve("2024/02/29").resolve(fileName);
-        long generatedSize = 10L * 64 * 1024;
-        AtomicReference<Throwable> writerFailure = new AtomicReference<>();
+        Path staging = destination.resolveSibling(fileName + ".tmp");
+        int chunks = 20;
 
+        AtomicBoolean stagingSeen = new AtomicBoolean();
+        AtomicReference<Throwable> writerFailure = new AtomicReference<>();
         Thread writer = new Thread(() -> {
             try {
-                writeInChunks(source, generatedSize);
+                writeInChunks(source, chunks, () -> {
+                    // The invariant, checked after every chunk rather than at one
+                    // arbitrary moment: a source that is still growing is never published.
+                    assertFalse(Files.exists(destination),
+                            "published while the source was still growing");
+                    assertTrue(Files.exists(source), "a changing source must remain in place");
+                    if (Files.exists(staging)) stagingSeen.set(true);
+                });
             } catch (Throwable e) {
                 writerFailure.set(e);
             }
         });
-        writer.start();
 
-        TimeUnit.MILLISECONDS.sleep(350);
-        assertTrue(Files.exists(source), "changing source must remain in place");
-        assertFalse(Files.exists(destination));
-        assertTrue(Files.exists(destination.resolveSibling(fileName + ".tmp")),
-                "a growing source should be copied into archive-side staging");
+        writer.start();
         writer.join();
-        assertNull(writerFailure.get());
-        await(() -> Files.exists(destination), Duration.ofSeconds(5));
-        assertTrue(Files.size(destination) == generatedSize);
+
+        Throwable failure = writerFailure.get();
+        if (failure != null) throw new AssertionError("the producer thread failed", failure);
+        assertTrue(stagingSeen.get(),
+                "a growing source should be copied into archive-side staging as it grows");
+
+        await(() -> Files.exists(destination), Duration.ofSeconds(10));
+        assertEquals((long) chunks * CHUNK_SIZE, Files.size(destination));
+        assertFalse(Files.exists(source), "the source is removed once its image is published");
+        assertFalse(Files.exists(staging));
     }
 
     @Test
@@ -167,16 +184,17 @@ class ArchiverIT {
         return database;
     }
 
-    private static void writeInChunks(Path path, long size) throws IOException, InterruptedException {
-        byte[] buffer = new byte[64 * 1024];
+    /** Writes in place, slowly, running {@code afterEachChunk} once every chunk lands. */
+    private static void writeInChunks(Path path, int chunks, Runnable afterEachChunk)
+            throws IOException, InterruptedException {
+        byte[] buffer = new byte[CHUNK_SIZE];
         try (OutputStream output = Files.newOutputStream(path,
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-            long remaining = size;
-            while (remaining > 0) {
-                int count = (int) Math.min(remaining, buffer.length);
-                output.write(buffer, 0, count);
-                remaining -= count;
-                if (remaining > 0) TimeUnit.MILLISECONDS.sleep(100);
+            for (int written = 0; written < chunks; written++) {
+                output.write(buffer);
+                output.flush();
+                afterEachChunk.run();
+                if (written < chunks - 1) TimeUnit.MILLISECONDS.sleep(100);
             }
         }
     }
