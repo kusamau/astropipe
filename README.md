@@ -145,9 +145,13 @@ loss of both copies is terminal.
 Schema version 3 is required. A database created by an earlier state model is
 rejected with an explicit request to create a fresh database.
 
-SQLite runs in WAL mode with `synchronous=NORMAL` on a single connection, which
-serialises the handful of tiny statements the pipeline issues — all SQLite would
-allow concurrently anyway.
+`Database` owns the single SQLite connection and the JDBC ceremony; it knows
+nothing about archiving. It opens in WAL mode with `synchronous=NORMAL` and
+serialises the handful of tiny statements the pipeline issues, which is all
+SQLite would allow concurrently anyway. `ArchiveRepository` holds only the ledger
+itself, and each state change is one statement whose `WHERE` clause carries the
+rule it enforces, so the guard is applied by the database rather than by a read
+followed by a write.
 
 ### Concurrency and backpressure
 

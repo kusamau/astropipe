@@ -24,17 +24,19 @@ class ArchiveRepositoryIT {
 
     private String databaseUrl;
     private ArchiveRepository repository;
+    private Database database;
 
     @BeforeEach
     void setUp() {
         databaseUrl = "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db");
-        repository = new ArchiveRepository(databaseUrl);
+        database = new Database(databaseUrl);
+        repository = new ArchiveRepository(database);
         repository.initialize();
     }
 
     @AfterEach
     void tearDown() {
-        if (repository != null) repository.close();
+        if (database != null) database.close();
     }
 
     @Test
@@ -82,15 +84,15 @@ class ArchiveRepositoryIT {
     @Test
     void refusesToTransitionRowsThatAreAbsentOrAlreadyTerminal() {
         String missing = "SAT_IMG_20240101120000000.raw";
-        ArchiveRepository.DatabaseException absent = assertThrows(
-                ArchiveRepository.DatabaseException.class, () -> repository.markFailed(missing));
+        Database.DatabaseException absent = assertThrows(
+                Database.DatabaseException.class, () -> repository.markFailed(missing));
         assertTrue(absent.getMessage().contains("expected one in-progress row but updated 0"));
 
         String archived = "SAT_IMG_20240101120000001.raw";
         repository.claim(archived, Instant.now());
         repository.markArchived(archived, temporaryDirectory, Instant.now());
 
-        assertThrows(ArchiveRepository.DatabaseException.class, () -> repository.markFailed(archived));
+        assertThrows(Database.DatabaseException.class, () -> repository.markFailed(archived));
     }
 
     @Test
@@ -109,7 +111,7 @@ class ArchiveRepositoryIT {
         // journal_mode is persisted in the database file; synchronous is per-connection,
         // so it has to be read back on the connection the repository actually writes on.
         assertEquals("wal", queryString("PRAGMA journal_mode").toLowerCase());
-        assertEquals(1, repository.pragma("synchronous"));
+        assertEquals(1, database.pragma("synchronous"));
     }
 
     @Test
@@ -129,10 +131,10 @@ class ArchiveRepositoryIT {
                     """);
         }
 
-        ArchiveRepository legacy = new ArchiveRepository(legacyUrl);
-        ArchiveRepository.DatabaseException failure =
-                assertThrows(ArchiveRepository.DatabaseException.class, legacy::initialize);
-        legacy.close();
+        Database legacyDatabase = new Database(legacyUrl);
+        Database.DatabaseException failure = assertThrows(Database.DatabaseException.class,
+                () -> new ArchiveRepository(legacyDatabase).initialize());
+        legacyDatabase.close();
 
         assertTrue(failure.getMessage().contains("create a fresh database"));
     }

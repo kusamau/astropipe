@@ -35,6 +35,7 @@ class ArchiverIT {
     private ScheduledExecutorService scheduler;
     private FileSystem sourceFileSystem;
     private ArchiveRepository repository;
+    private Database database;
 
     @AfterEach
     void tearDown() throws Exception {
@@ -44,7 +45,7 @@ class ArchiverIT {
             workers.shutdown();
             workers.awaitTermination(5, TimeUnit.SECONDS);
         }
-        if (repository != null) repository.close();
+        if (database != null) database.close();
         if (sourceFileSystem != null) sourceFileSystem.close();
     }
 
@@ -146,7 +147,7 @@ class ArchiverIT {
         // Staging from a dead run, holding bytes that never matched the source.
         Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "ZZZZZZ");
 
-        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(openDatabase());
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
@@ -159,6 +160,11 @@ class ArchiverIT {
         assertEquals("abcdefgh", Files.readString(destination));
         assertFalse(Files.exists(source));
         assertFalse(Files.exists(staging));
+    }
+
+    private Database openDatabase() {
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        return database;
     }
 
     private static void writeInChunks(Path path, long size) throws IOException, InterruptedException {
@@ -180,7 +186,7 @@ class ArchiverIT {
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         if (startupFile != null) Files.writeString(source.resolve(startupFile), "startup");
 
-        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(openDatabase());
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
@@ -204,7 +210,7 @@ class ArchiverIT {
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         Files.writeString(source.resolve(startupFile), "startup");
 
-        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(openDatabase());
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());

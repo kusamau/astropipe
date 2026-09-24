@@ -41,7 +41,8 @@ public final class Main {
         ArchivePathResolver pathResolver = new ArchivePathResolver(archiveDirectory);
         FileMover fileMover = new FileMover();
 
-        try (ArchiveRepository repository = new ArchiveRepository(config.databaseUrl())) {
+        try (Database database = new Database(config.databaseUrl())) {
+            ArchiveRepository repository = new ArchiveRepository(database);
             repository.initialize();
             recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository);
             archiveUntilStopped(config, sourceDirectory, pathResolver, fileMover, repository);

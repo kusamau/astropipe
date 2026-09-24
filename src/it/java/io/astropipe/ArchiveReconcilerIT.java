@@ -22,20 +22,21 @@ class ArchiveReconcilerIT {
     private ArchivePathResolver resolver;
     private final FileMover fileMover = new FileMover();
     private ArchiveRepository repository;
+    private Database database;
     private ArchiveReconciler reconciler;
 
     @BeforeEach
     void setUp() throws Exception {
         source = Files.createDirectory(temporaryDirectory.resolve("source"));
         resolver = new ArchivePathResolver(Files.createDirectory(temporaryDirectory.resolve("archive")));
-        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(openDatabase());
         repository.initialize();
         reconciler = new ArchiveReconciler(source, resolver, fileMover, repository);
     }
 
     @AfterEach
     void tearDown() {
-        if (repository != null) repository.close();
+        if (database != null) database.close();
     }
 
     @Test
@@ -90,6 +91,11 @@ class ArchiveReconcilerIT {
 
     private void claim(String... fileNames) {
         for (String fileName : fileNames) repository.claim(fileName, Instant.now());
+    }
+
+    private Database openDatabase() {
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        return database;
     }
 
     private Path destinationOf(String fileName) throws Exception {
