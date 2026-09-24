@@ -36,46 +36,77 @@ public final class Main {
     private static void run(Config config) throws IOException, InterruptedException {
         Path sourceDirectory = directory(config.sourceDir(), "sourceDir", false);
         Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
-        logger.info("Source store={} archive store={}",
-                Files.getFileStore(sourceDirectory), Files.getFileStore(archiveDirectory));
+        logStorageLayout(sourceDirectory, archiveDirectory);
 
         ArchivePathResolver pathResolver = new ArchivePathResolver(archiveDirectory);
         FileMover fileMover = new FileMover();
 
         try (ArchiveRepository repository = new ArchiveRepository(config.databaseUrl())) {
             repository.initialize();
-            ArchiveReconciler.Result reconciliation =
-                    new ArchiveReconciler(sourceDirectory, pathResolver, fileMover, repository).reconcile();
-            logger.info("Startup reconciliation: archived={} resumable={} failed={}",
-                    reconciliation.archived(), reconciliation.resumable(), reconciliation.failed());
-
-            ThreadPoolExecutor workers = new ThreadPoolExecutor(
-                    config.workerPoolSize(),
-                    config.workerPoolSize(),
-                    0L,
-                    TimeUnit.MILLISECONDS,
-                    new ArrayBlockingQueue<>(config.workerQueueCapacity()),
-                    namedThreads("archive-worker-"),
-                    new ThreadPoolExecutor.CallerRunsPolicy());
-            ScheduledExecutorService scheduler =
-                    Executors.newSingleThreadScheduledExecutor(namedThreads("reconciliation-"));
-            SourceWatcher watcher = new SourceWatcher(
-                    sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler);
-
-            stopOnShutdownSignal(watcher);
-            try {
-                watcher.start();
-                logger.info("Monitoring source directory={} archive directory={}",
-                        sourceDirectory, archiveDirectory);
-                watcher.awaitTermination();
-            } finally {
-                logger.info("Shutdown started");
-                watcher.close();
-                scheduler.shutdownNow();
-                drain(workers);
-                logger.info("Shutdown complete");
-            }
+            recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository);
+            archiveUntilStopped(config, sourceDirectory, pathResolver, fileMover, repository);
         }
+    }
+
+    /** Whether source and archive share a device decides how much copying really costs. */
+    private static void logStorageLayout(Path sourceDirectory, Path archiveDirectory) throws IOException {
+        logger.info("Source directory={} store={}", sourceDirectory, Files.getFileStore(sourceDirectory));
+        logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
+    }
+
+    /** Resolves whatever the last run left mid-flight before new work is accepted. */
+    private static void recoverPreviousRun(
+            Path sourceDirectory,
+            ArchivePathResolver pathResolver,
+            FileMover fileMover,
+            ArchiveRepository repository) throws IOException {
+        ArchiveReconciler.Result result =
+                new ArchiveReconciler(sourceDirectory, pathResolver, fileMover, repository).reconcile();
+        logger.info("Startup reconciliation: archived={} resumable={} failed={}",
+                result.archived(), result.resumable(), result.failed());
+    }
+
+    /** Runs the pipeline until a shutdown signal arrives, then drains it. */
+    private static void archiveUntilStopped(
+            Config config,
+            Path sourceDirectory,
+            ArchivePathResolver pathResolver,
+            FileMover fileMover,
+            ArchiveRepository repository) throws InterruptedException {
+        ThreadPoolExecutor workers = newWorkerPool(config);
+        ScheduledExecutorService scheduler =
+                Executors.newSingleThreadScheduledExecutor(namedThreads("reconciliation-"));
+        SourceWatcher watcher = new SourceWatcher(
+                sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler);
+
+        stopOnShutdownSignal(watcher);
+        try {
+            watcher.start();
+            logger.info("Monitoring source directory={}", sourceDirectory);
+            watcher.awaitTermination();
+        } finally {
+            shutDown(watcher, scheduler, workers);
+        }
+    }
+
+    private static ThreadPoolExecutor newWorkerPool(Config config) {
+        return new ThreadPoolExecutor(
+                config.workerPoolSize(),
+                config.workerPoolSize(),
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(config.workerQueueCapacity()),
+                namedThreads("archive-worker-"),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+    }
+
+    private static void shutDown(
+            SourceWatcher watcher, ScheduledExecutorService scheduler, ThreadPoolExecutor workers) {
+        logger.info("Shutdown started");
+        watcher.close();
+        scheduler.shutdownNow();
+        drain(workers);
+        logger.info("Shutdown complete");
     }
 
     /** Unblocks the main thread on Ctrl-C or SIGTERM, then waits for it to drain. */
