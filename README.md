@@ -9,6 +9,12 @@ and in a log file.
 
 Requirements: Linux, Java 21 or newer, Maven 3.8 or newer.
 
+`sqlite-jdbc` carries a native library for each of 24 platforms, which is most of
+the packaged jar. The build keeps only 64-bit Linux and macOS — every machine this
+is built, reviewed or deployed on — which takes the jar from 17 MB to under 6 MB.
+Running anywhere else means widening the `org.xerial:sqlite-jdbc` filter in
+`pom.xml`.
+
 ```bash
 mvn clean package
 ./scripts/run.sh
@@ -144,6 +150,9 @@ loss of both copies is terminal.
 
 Schema version 3 is required. A database created by an earlier state model is
 rejected with an explicit request to create a fresh database.
+
+The only index is partial and covering: it holds in-progress rows alone, which are
+transient, so the startup lookup stays instant however large the archive grows.
 
 `Database` owns the single SQLite connection and the JDBC ceremony; it knows
 nothing about archiving. It opens in WAL mode with `synchronous=NORMAL` and

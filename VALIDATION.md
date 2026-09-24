@@ -209,6 +209,9 @@ threads in log:  1000 x [reconciliation-1], 7 x [main]
 
 ## Known gaps
 
+- The ledger is never pruned. That is deliberate — old names are what reject
+  duplicates — but it grows without bound and has no documented retention story.
+- The packaged jar carries native SQLite libraries for 64-bit Linux and macOS only.
 - An image interrupted mid-copy is copied again from the beginning on restart.
   This is deliberate (see README), but it is worth measuring before pointing
   Astropipe at files where a re-copy would be expensive.
