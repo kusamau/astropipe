@@ -17,7 +17,7 @@ public record AppConfig(
         @Valid @DefaultValue WatchProperties watch,
         @Valid @DefaultValue StabilityProperties stability,
         @Valid @DefaultValue WorkerProperties workers,
-        @DefaultValue("false") boolean forceCopyPath) {
+        @DefaultValue("true") boolean createArchiveDir) {
 
     @AssertTrue(message = "sourceDir and archiveDir must be different directories")
     public boolean isSourceAndArchiveDirectoriesDifferent() {

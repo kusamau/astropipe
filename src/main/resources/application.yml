@@ -1,6 +1,4 @@
 spring:
-  main:
-    web-application-type: none
   datasource:
     url: jdbc:sqlite:./data/archive.db
     hikari:
@@ -12,12 +10,4 @@ spring:
 astropipe:
   source-dir: ./data/source
   archive-dir: ./data/archive
-  watch:
-    reconciliation-interval-seconds: 30
-  stability:
-    enabled: true
-    poll-interval-millis: 250
-    consecutive-stable-checks: 2
-  workers:
-    pool-size: 2
-    queue-capacity: 10000
+  create-archive-dir: true

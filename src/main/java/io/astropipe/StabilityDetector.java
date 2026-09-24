@@ -16,16 +16,16 @@ public final class StabilityDetector {
         this.properties = Objects.requireNonNull(properties, "properties");
     }
 
-    public boolean enabled() {
-        return properties.enabled();
-    }
-
     public int pollIntervalMillis() {
         return properties.pollIntervalMillis();
     }
 
-    public int consecutiveStableChecks() {
-        return properties.consecutiveStableChecks();
+    public int quietPeriodMillis() {
+        return properties.quietPeriodMillis();
+    }
+
+    public int resumeOverlapBytes() {
+        return properties.resumeOverlapBytes();
     }
 
     public Snapshot sample(Path path) throws IOException {
@@ -38,6 +38,10 @@ public final class StabilityDetector {
 
     public boolean unchanged(Snapshot previous, Snapshot current) {
         return previous != null && previous.equals(current);
+    }
+
+    public boolean quietFor(long quietSinceNanos, long nowNanos) {
+        return nowNanos - quietSinceNanos >= properties.quietPeriodMillis() * 1_000_000L;
     }
 
     public record Snapshot(long size, FileTime lastModifiedTime) { }

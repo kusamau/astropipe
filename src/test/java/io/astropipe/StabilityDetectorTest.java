@@ -16,7 +16,7 @@ class StabilityDetectorTest {
 
     @Test
     void comparesBothSizeAndModificationTime() throws Exception {
-        StabilityDetector detector = new StabilityDetector(new StabilityProperties(true, 10, 2));
+        StabilityDetector detector = new StabilityDetector(new StabilityProperties(10, 20, 64));
         Path file = temporaryDirectory.resolve("file.raw");
         Files.writeString(file, "first");
         StabilityDetector.Snapshot first = detector.sample(file);
@@ -30,8 +30,12 @@ class StabilityDetectorTest {
 
     @Test
     void reportsConfiguredPolicy() {
-        StabilityDetector detector = new StabilityDetector(new StabilityProperties(false, 75, 4));
-        assertFalse(detector.enabled());
-        assertTrue(detector.pollIntervalMillis() == 75 && detector.consecutiveStableChecks() == 4);
+        StabilityDetector detector = new StabilityDetector(new StabilityProperties(75, 200, 4096));
+
+        assertTrue(detector.pollIntervalMillis() == 75
+                && detector.quietPeriodMillis() == 200
+                && detector.resumeOverlapBytes() == 4096);
+        assertFalse(detector.quietFor(1_000_000L, 200_999_999L));
+        assertTrue(detector.quietFor(1_000_000L, 201_000_000L));
     }
 }

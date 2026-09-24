@@ -38,13 +38,23 @@ class AppConfigTest {
                     assertThat(config.sourceDir()).isEqualTo("source");
                     assertThat(config.archiveDir()).isEqualTo("archive");
                     assertThat(config.watch().reconciliationIntervalSeconds()).isEqualTo(30);
-                    assertThat(config.stability().enabled()).isTrue();
                     assertThat(config.stability().pollIntervalMillis()).isEqualTo(250);
-                    assertThat(config.stability().consecutiveStableChecks()).isEqualTo(2);
+                    assertThat(config.stability().quietPeriodMillis()).isEqualTo(250);
+                    assertThat(config.stability().resumeOverlapBytes()).isEqualTo(65_536);
                     assertThat(config.workers().poolSize()).isEqualTo(4);
                     assertThat(config.workers().queueCapacity()).isEqualTo(10_000);
-                    assertThat(config.forceCopyPath()).isFalse();
+                    assertThat(config.createArchiveDir()).isTrue();
                 });
+    }
+
+    @Test
+    void bindsDisabledArchiveDirectoryCreation() {
+        contextRunner
+                .withPropertyValues(
+                        "astropipe.source-dir=source",
+                        "astropipe.archive-dir=archive",
+                        "astropipe.create-archive-dir=false")
+                .run(context -> assertThat(context.getBean(AppConfig.class).createArchiveDir()).isFalse());
     }
 
     @Test
@@ -65,7 +75,8 @@ class AppConfigTest {
                         "astropipe.archive-dir=archive",
                         "astropipe.watch.reconciliation-interval-seconds=0",
                         "astropipe.stability.poll-interval-millis=0",
-                        "astropipe.stability.consecutive-stable-checks=1",
+                        "astropipe.stability.quiet-period-millis=0",
+                        "astropipe.stability.resume-overlap-bytes=0",
                         "astropipe.workers.pool-size=0",
                         "astropipe.workers.queue-capacity=0")
                 .run(context -> {
@@ -73,7 +84,8 @@ class AppConfigTest {
                     assertThat(context.getStartupFailure())
                             .hasStackTraceContaining("watch.reconciliationIntervalSeconds must be greater than zero")
                             .hasStackTraceContaining("stability.pollIntervalMillis must be greater than zero")
-                            .hasStackTraceContaining("stability.consecutiveStableChecks must be at least 2")
+                            .hasStackTraceContaining("stability.quietPeriodMillis must be greater than zero")
+                            .hasStackTraceContaining("stability.resumeOverlapBytes must be greater than zero")
                             .hasStackTraceContaining("workers.poolSize must be greater than zero")
                             .hasStackTraceContaining("workers.queueCapacity must be greater than zero");
                 });

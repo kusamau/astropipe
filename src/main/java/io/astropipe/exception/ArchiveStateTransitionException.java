@@ -9,7 +9,7 @@ public final class ArchiveStateTransitionException extends IncorrectUpdateSemant
 
     public ArchiveStateTransitionException(String fileName, String transition, int affectedRows) {
         super("Could not transition " + fileName + " to " + transition
-                + "; expected one PENDING row but updated " + affectedRows);
+                + "; expected one active row but updated " + affectedRows);
         this.fileName = fileName;
         this.transition = transition;
         this.affectedRows = affectedRows;

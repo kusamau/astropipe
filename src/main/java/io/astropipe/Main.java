@@ -10,7 +10,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 import java.io.IOException;
-import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -47,30 +46,20 @@ public final class Main implements CommandLineRunner {
         Path sourceDirectory = Path.of(config.sourceDir()).toAbsolutePath().normalize();
         Path archiveDirectory = Path.of(config.archiveDir()).toAbsolutePath().normalize();
         validateDirectory(sourceDirectory, "sourceDir");
-        validateDirectory(archiveDirectory, "archiveDir");
+        prepareArchiveDirectory(archiveDirectory, config.createArchiveDir());
 
-        FileStore sourceStore = Files.getFileStore(sourceDirectory);
-        FileStore archiveStore = Files.getFileStore(archiveDirectory);
-        String storeMode = sourceStore.equals(archiveStore)
-                ? "SAME_FILESTORE (rename fast path)"
-                : "CROSS_FILESTORE (copy fallback)";
-        if (config.forceCopyPath()) storeMode += " [copy path forced for validation]";
-        logger.info("File movement mode: {} sourceStore={} archiveStore={}",
-                storeMode, sourceStore, archiveStore);
+        logger.info("File movement mode: INCREMENTAL_STAGING sourceStore={} archiveStore={}",
+                Files.getFileStore(sourceDirectory), Files.getFileStore(archiveDirectory));
 
         FileNameParser parser = new FileNameParser();
         ArchivePathResolver resolver = new ArchivePathResolver(archiveDirectory);
-        FileMover mover = new FileMover(config.forceCopyPath());
-        int removedTemporaryFiles = mover.cleanStaleTemporaryFiles(archiveDirectory);
-        if (removedTemporaryFiles > 0) {
-            logger.info("Removed {} stale archive temporary file(s)", removedTemporaryFiles);
-        }
+        FileMover mover = new FileMover();
 
         repository.initialize();
         ArchiveRepository.ReconciliationResult reconciliation =
-                repository.reconcilePending(sourceDirectory, parser, resolver);
-        logger.info("Startup database reconciliation: archived={} reset={} failed={}",
-                reconciliation.archived(), reconciliation.reset(), reconciliation.failed());
+                repository.reconcileInProgress(sourceDirectory, parser, resolver);
+        logger.info("Startup database reconciliation: archived={} resumable={} failed={}",
+                reconciliation.archived(), reconciliation.resumable(), reconciliation.failed());
 
         workers = new ThreadPoolExecutor(
                 config.workers().poolSize(),
@@ -140,6 +129,21 @@ public final class Main implements CommandLineRunner {
         if (!Files.isReadable(directory) || !Files.isWritable(directory)) {
             throw new IOException(setting + " directory must be readable and writable: " + directory);
         }
+    }
+
+    static void prepareArchiveDirectory(Path directory, boolean createIfMissing) throws IOException {
+        if (!Files.exists(directory)) {
+            if (!createIfMissing) {
+                throw new IOException("archiveDir directory does not exist: " + directory);
+            }
+            try {
+                Files.createDirectories(directory);
+                logger.info("Created archiveDir directory={}", directory);
+            } catch (IOException e) {
+                throw new IOException("Could not create archiveDir directory: " + directory, e);
+            }
+        }
+        validateDirectory(directory, "archiveDir");
     }
 
     private static ThreadFactory namedThreads(String prefix) {

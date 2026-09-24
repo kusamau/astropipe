@@ -1,105 +1,135 @@
 package io.astropipe;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.List;
 
 public final class FileMover {
     private static final long MAX_TRANSFER_CHUNK = 2L * 1024 * 1024 * 1024 - 1;
+    private static final int COMPARISON_BUFFER_SIZE = 64 * 1024;
 
-    private final boolean forceCopyPath;
-
-    public FileMover(boolean forceCopyPath) {
-        this.forceCopyPath = forceCopyPath;
+    public Path stagingPath(Path destination) {
+        return destination.resolveSibling(destination.getFileName() + ".tmp");
     }
 
-    public MoveResult move(Path source, Path destination) throws IOException {
-        long started = System.nanoTime();
+    public long normalizeStaging(Path staging, long checkpoint) throws IOException {
+        if (!Files.exists(staging)) {
+            Files.createFile(staging);
+            return 0;
+        }
+        long size = Files.size(staging);
+        if (size < checkpoint) {
+            try (FileChannel output = FileChannel.open(staging, StandardOpenOption.WRITE)) {
+                output.truncate(0);
+                output.force(true);
+            }
+            return 0;
+        }
+        if (size > checkpoint) {
+            try (FileChannel output = FileChannel.open(staging, StandardOpenOption.WRITE)) {
+                output.truncate(checkpoint);
+                output.force(true);
+            }
+        }
+        return checkpoint;
+    }
+
+    public void validateOverlap(
+            Path source,
+            Path staging,
+            long resumeOffset,
+            long checkpoint) throws IOException {
+        if (resumeOffset < 0 || resumeOffset > checkpoint) {
+            throw new IllegalArgumentException("Invalid overlap range " + resumeOffset + ".." + checkpoint);
+        }
+        try (FileChannel sourceChannel = FileChannel.open(source, StandardOpenOption.READ);
+             FileChannel stagingChannel = FileChannel.open(staging, StandardOpenOption.READ)) {
+            ByteBuffer sourceBuffer = ByteBuffer.allocate(COMPARISON_BUFFER_SIZE);
+            ByteBuffer stagingBuffer = ByteBuffer.allocate(COMPARISON_BUFFER_SIZE);
+            long position = resumeOffset;
+            while (position < checkpoint) {
+                int count = (int) Math.min(COMPARISON_BUFFER_SIZE, checkpoint - position);
+                readFully(sourceChannel, sourceBuffer, position, count, source);
+                readFully(stagingChannel, stagingBuffer, position, count, staging);
+                if (!sourceBuffer.equals(stagingBuffer)) {
+                    throw new OverlapMismatchException(source, staging, resumeOffset, checkpoint);
+                }
+                position += count;
+            }
+        }
+    }
+
+    public long appendRange(Path source, Path staging, long from, long to) throws IOException {
+        if (from < 0 || to < from) {
+            throw new IllegalArgumentException("Invalid copy range " + from + ".." + to);
+        }
+        try (FileChannel input = FileChannel.open(source, StandardOpenOption.READ);
+             FileChannel output = FileChannel.open(staging, StandardOpenOption.WRITE)) {
+            long stagingSize = output.size();
+            if (stagingSize != from) {
+                throw new IOException("Staging size " + stagingSize
+                        + " does not match checkpoint " + from + " for " + staging);
+            }
+            output.position(from);
+            long position = from;
+            while (position < to) {
+                long transferred = input.transferTo(
+                        position, Math.min(to - position, MAX_TRANSFER_CHUNK), output);
+                if (transferred <= 0) {
+                    throw new IOException("Copy made no progress for " + source + " at byte " + position);
+                }
+                position += transferred;
+            }
+            output.force(true);
+            return position;
+        }
+    }
+
+    public void publish(Path staging, Path destination) throws IOException {
         if (Files.exists(destination)) {
             throw new FileAlreadyExistsException(destination.toString());
         }
-        if (!forceCopyPath) {
-            try {
-                Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE);
-                return new MoveResult(MoveMethod.ATOMIC_RENAME, elapsedMillis(started));
-            } catch (AtomicMoveNotSupportedException ignored) {
-                // Cross-filestore moves take the crash-safe copy path below.
-            }
-        }
-        copyThenDelete(source, destination);
-        return new MoveResult(MoveMethod.COPY_FALLBACK, elapsedMillis(started));
+        Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE);
     }
 
-    private void copyThenDelete(Path source, Path destination) throws IOException {
-        Path temporary = destination.resolveSibling(destination.getFileName() + ".tmp");
-        boolean published = false;
-        try {
-            try (FileChannel input = FileChannel.open(source, StandardOpenOption.READ);
-                 FileChannel output = FileChannel.open(temporary,
-                         StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-                long size = input.size();
-                long position = 0;
-                while (position < size) {
-                    long transferred = input.transferTo(position,
-                            Math.min(size - position, MAX_TRANSFER_CHUNK), output);
-                    if (transferred <= 0) {
-                        throw new IOException("Copy made no progress for " + source + " at byte " + position);
-                    }
-                    position += transferred;
-                }
-                output.force(true);
-            }
-            Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE);
-            published = true;
-            try {
-                Files.delete(source);
-            } catch (IOException deleteFailure) {
-                try {
-                    Files.delete(destination);
-                    published = false;
-                } catch (IOException rollbackFailure) {
-                    deleteFailure.addSuppressed(rollbackFailure);
-                }
-                throw new IOException("Copied " + source + " but could not remove the source", deleteFailure);
-            }
-        } finally {
-            if (!published) Files.deleteIfExists(temporary);
+    public void rollbackPublication(Path destination, Path staging) throws IOException {
+        if (Files.exists(staging)) {
+            throw new FileAlreadyExistsException(staging.toString());
         }
+        Files.move(destination, staging, StandardCopyOption.ATOMIC_MOVE);
     }
 
-    public int cleanStaleTemporaryFiles(Path archiveRoot) throws IOException {
-        List<IOException> failures = new ArrayList<>();
-        int removed = 0;
-        try (var paths = Files.walk(archiveRoot)) {
-            for (Path path : paths.filter(Files::isRegularFile)
-                    .filter(SatelliteImageName::isArchiveTemporaryFile).toList()) {
-                try {
-                    if (Files.deleteIfExists(path)) removed++;
-                } catch (IOException e) {
-                    failures.add(e);
-                }
+    private static void readFully(
+            FileChannel channel,
+            ByteBuffer buffer,
+            long position,
+            int count,
+            Path path) throws IOException {
+        buffer.clear();
+        buffer.limit(count);
+        long offset = position;
+        while (buffer.hasRemaining()) {
+            int read = channel.read(buffer, offset);
+            if (read < 0) {
+                throw new IOException("Unexpected end of file while reading " + path + " at byte " + offset);
             }
+            if (read == 0) {
+                throw new IOException("Read made no progress for " + path + " at byte " + offset);
+            }
+            offset += read;
         }
-        if (!failures.isEmpty()) {
-            IOException combined = new IOException("Could not remove all stale archive temporary files");
-            failures.forEach(combined::addSuppressed);
-            throw combined;
-        }
-        return removed;
+        buffer.flip();
     }
 
-    private static long elapsedMillis(long started) {
-        return (System.nanoTime() - started) / 1_000_000;
+    public static final class OverlapMismatchException extends IOException {
+        public OverlapMismatchException(Path source, Path staging, long from, long to) {
+            super("Source and staging overlap differ for " + source + " and " + staging
+                    + " over bytes " + from + ".." + to);
+        }
     }
-
-    public enum MoveMethod { ATOMIC_RENAME, COPY_FALLBACK }
-
-    public record MoveResult(MoveMethod method, long durationMillis) { }
 }

@@ -9,10 +9,14 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -31,6 +35,7 @@ class ArchiverIT {
     private SourceWatcher watcher;
     private ThreadPoolExecutor workers;
     private ScheduledExecutorService scheduler;
+    private FileSystem sourceFileSystem;
 
     @AfterEach
     void tearDown() throws Exception {
@@ -40,11 +45,12 @@ class ArchiverIT {
             workers.shutdown();
             workers.awaitTermination(5, TimeUnit.SECONDS);
         }
+        if (sourceFileSystem != null) sourceFileSystem.close();
     }
 
     @Test
     void archivesStartupAndWatchEventsAndIgnoresMalformedFiles() throws Exception {
-        Fixture fixture = startFixture(false, 10, 2,
+        Fixture fixture = startFixture(10, 50, 4,
                 "SAT_IMG_20211231235959999.raw");
         Path startupDestination = fixture.archive.resolve(
                 "2021/12/31/SAT_IMG_20211231235959999.raw");
@@ -64,7 +70,7 @@ class ArchiverIT {
 
     @Test
     void doesNotMoveFileWhileUnsafeGeneratorIsStillWriting() throws Exception {
-        Fixture fixture = startFixture(true, 100, 2, null);
+        Fixture fixture = startFixture(50, 250, 64 * 1024, null);
         String fileName = "SAT_IMG_20240229120000000.raw";
         Path source = fixture.source.resolve(fileName);
         Path destination = fixture.archive.resolve("2024/02/29").resolve(fileName);
@@ -83,6 +89,8 @@ class ArchiverIT {
         TimeUnit.MILLISECONDS.sleep(350);
         assertTrue(Files.exists(source), "changing source must remain in place");
         assertFalse(Files.exists(destination));
+        assertTrue(Files.exists(destination.resolveSibling(fileName + ".tmp")),
+                "a growing source should be copied into archive-side staging");
         writer.join();
         assertNull(writerFailure.get());
         await(() -> Files.exists(destination), Duration.ofSeconds(5));
@@ -104,6 +112,63 @@ class ArchiverIT {
         await(() -> Files.exists(destination), Duration.ofSeconds(5));
     }
 
+    @Test
+    void failsWithoutAppendingWhenTheResumeOverlapDiffers() throws Exception {
+        Fixture fixture = startFixture(25, 2_000, 4, null);
+        String fileName = "SAT_IMG_20240301120000000.raw";
+        Path source = Files.writeString(fixture.source.resolve(fileName), "abcdefgh");
+        Path destination = fixture.archive.resolve("2024/03/01").resolve(fileName);
+        Path staging = destination.resolveSibling(fileName + ".tmp");
+        await(() -> Files.exists(staging) && Files.size(staging) == 8, Duration.ofSeconds(5));
+
+        Files.writeString(staging, "abcdefXh", StandardOpenOption.TRUNCATE_EXISTING);
+        Files.writeString(source, "ijkl", StandardOpenOption.APPEND);
+
+        await(() -> fixture.repository.beginOrResume(fileName, Instant.now()).status()
+                == ArchiveRepository.Status.FAILED, Duration.ofSeconds(5));
+        assertTrue(Files.exists(source));
+        assertTrue(Files.exists(staging));
+        assertFalse(Files.exists(destination));
+        assertTrue(Files.readString(staging).equals("abcdefXh"));
+    }
+
+    @Test
+    void resumesFromCheckpointAndDropsUncheckpointedTail() throws Exception {
+        Path sourceDirectory = Files.createDirectory(temporaryDirectory.resolve("source"));
+        Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
+        String fileName = "SAT_IMG_20240302120000000.raw";
+        Path source = Files.writeString(sourceDirectory.resolve(fileName), "abcdefgh");
+        ArchivePathResolver resolver = new ArchivePathResolver(archive);
+        Path destination = resolver.resolve(fileName, new FileNameParser().parse(source));
+        Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "abcdZZ");
+
+        var dataSource = new DriverManagerDataSource(
+                "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        ArchiveRepository repository = new ArchiveRepository(new JdbcTemplate(dataSource));
+        repository.initialize();
+        repository.beginOrResume(fileName, Instant.now());
+        repository.markStaging(fileName, 4);
+        workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        watcher = new SourceWatcher(
+                sourceDirectory,
+                new FileNameParser(),
+                new StabilityDetector(new StabilityProperties(25, 50, 4)),
+                resolver,
+                new FileMover(),
+                repository,
+                workers,
+                scheduler,
+                1);
+        watcher.start();
+
+        await(() -> Files.exists(destination), Duration.ofSeconds(5));
+        assertTrue(Files.readString(destination).equals("abcdefgh"));
+        assertFalse(Files.exists(source));
+        assertFalse(Files.exists(staging));
+    }
+
     private static void writeInChunks(Path path, long size) throws IOException, InterruptedException {
         byte[] buffer = new byte[64 * 1024];
         try (OutputStream output = Files.newOutputStream(path,
@@ -119,9 +184,9 @@ class ArchiverIT {
     }
 
     private Fixture startFixture(
-            boolean stabilityEnabled,
             int pollMillis,
-            int stableChecks,
+            int quietMillis,
+            int overlapBytes,
             String startupFile) throws Exception {
         Path source = Files.createDirectory(temporaryDirectory.resolve("source"));
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
@@ -137,19 +202,21 @@ class ArchiverIT {
         watcher = new SourceWatcher(
                 source,
                 new FileNameParser(),
-                new StabilityDetector(new StabilityProperties(stabilityEnabled, pollMillis, stableChecks)),
+                new StabilityDetector(new StabilityProperties(pollMillis, quietMillis, overlapBytes)),
                 new ArchivePathResolver(archive),
-                new FileMover(false),
+                new FileMover(),
                 repository,
                 workers,
                 scheduler,
                 1);
         watcher.start();
-        return new Fixture(source, archive);
+        return new Fixture(source, archive, repository);
     }
 
     private Fixture startFixtureWithUnavailableWatchService(String startupFile) throws Exception {
-        Path source = Files.createDirectory(temporaryDirectory.resolve("source"));
+        sourceFileSystem = FileSystems.newFileSystem(
+                temporaryDirectory.resolve("source.zip"), Map.of("create", "true"));
+        Path source = Files.createDirectory(sourceFileSystem.getPath("/source"));
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         Files.writeString(source.resolve(startupFile), "startup");
 
@@ -163,16 +230,15 @@ class ArchiverIT {
         watcher = new SourceWatcher(
                 source,
                 new FileNameParser(),
-                new StabilityDetector(new StabilityProperties(false, 100, 2)),
+                new StabilityDetector(new StabilityProperties(50, 100, 4)),
                 new ArchivePathResolver(archive),
-                new FileMover(false),
+                new FileMover(),
                 repository,
                 workers,
                 scheduler,
-                1,
-                ignored -> { throw new IOException("WatchService intentionally unavailable"); });
+                1);
         watcher.start();
-        return new Fixture(source, archive);
+        return new Fixture(source, archive, repository);
     }
 
     private static void await(CheckedCondition condition, Duration timeout) throws Exception {
@@ -188,5 +254,5 @@ class ArchiverIT {
         boolean evaluate() throws Exception;
     }
 
-    private record Fixture(Path source, Path archive) { }
+    private record Fixture(Path source, Path archive, ArchiveRepository repository) { }
 }
