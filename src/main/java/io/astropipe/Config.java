@@ -22,11 +22,14 @@ public record Config(
         int workerQueueCapacity) {
 
     public Config {
-        sourceDir = required(sourceDir, "sourceDir");
-        archiveDir = required(archiveDir, "archiveDir");
+        // Reject what cannot be defaulted...
+        requireNotBlank(sourceDir, "sourceDir");
+        requireNotBlank(archiveDir, "archiveDir");
         if (absolute(sourceDir).equals(absolute(archiveDir))) {
             throw new IllegalArgumentException("sourceDir and archiveDir must be different directories");
         }
+
+        // ...then fill in what was left out.
         databaseUrl = databaseUrl == null || databaseUrl.isBlank()
                 ? "jdbc:sqlite:./data/archive.db" : databaseUrl;
         pollIntervalMillis = positive(pollIntervalMillis, 250, "pollIntervalMillis");
@@ -45,11 +48,10 @@ public record Config(
         }
     }
 
-    private static String required(String value, String name) {
+    private static void requireNotBlank(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(name + " must not be blank");
         }
-        return value;
     }
 
     private static int positive(int value, int fallback, String name) {
