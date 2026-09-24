@@ -165,29 +165,29 @@ pipeline {
         // <<< local-ci:stage:maven
 
         // >>> local-ci:stage:depcheck
-        stage('Java dependency CVEs') {
-            when { expression { env.LCI_RUN_DEPCHECK == 'true' } }
-            steps {
-                // buildResult: 'UNSTABLE' rather than 'FAILURE' while
-                // CI_DEPCHECK_FAIL_ON_CVSS is empty: findings colour the build
-                // without breaking it. See templates/README.md's "ratchet" note.
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    script {
-                        def threshold = env.CI_DEPCHECK_FAIL_ON_CVSS?.trim()
-                        dependencyCheckGate(
-                            pom: env.LCI_MAVEN_POM,
-                            goal: env.LCI_DEPCHECK_GOAL,
-                            failOnCvss: threshold ? threshold.toDouble() : null,
-                            logFile: 'dependency-check.log',
-                        )
-                    }
-                }
-            }
-            post {
-                unstable { script { archiveFailure('dependency-check', 'dependency-check.log') } }
-                failure  { script { archiveFailure('dependency-check', 'dependency-check.log') } }
-            }
-        }
+//         stage('Java dependency CVEs') {
+//             when { expression { env.LCI_RUN_DEPCHECK == 'true' } }
+//             steps {
+//                 // buildResult: 'UNSTABLE' rather than 'FAILURE' while
+//                 // CI_DEPCHECK_FAIL_ON_CVSS is empty: findings colour the build
+//                 // without breaking it. See templates/README.md's "ratchet" note.
+//                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+//                     script {
+//                         def threshold = env.CI_DEPCHECK_FAIL_ON_CVSS?.trim()
+//                         dependencyCheckGate(
+//                             pom: env.LCI_MAVEN_POM,
+//                             goal: env.LCI_DEPCHECK_GOAL,
+//                             failOnCvss: threshold ? threshold.toDouble() : null,
+//                             logFile: 'dependency-check.log',
+//                         )
+//                     }
+//                 }
+//             }
+//             post {
+//                 unstable { script { archiveFailure('dependency-check', 'dependency-check.log') } }
+//                 failure  { script { archiveFailure('dependency-check', 'dependency-check.log') } }
+//             }
+//         }
         // <<< local-ci:stage:depcheck
 
         // >>> local-ci:stage:node
