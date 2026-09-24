@@ -4,36 +4,29 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.ClosedWatchServiceException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
- * Detects source images and drives each one through staging to the archive.
+ * Drives each detected image through staging to the archive.
  *
- * <p>{@code WatchService} gives low-latency events but cannot report what happened while
- * the process was down and may overflow, so a startup listing and a periodic listing run
- * alongside it. A detected file is only published once its size and modification time have
- * held still for the configured quiet period.
+ * <p>Finding files is {@link SourceDetector}'s job; this class decides what happens to
+ * one once it has been found. A detected file is only published after its size and
+ * modification time have held still for the configured quiet period.
  */
 final class SourceWatcher implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(SourceWatcher.class);
 
-    private final Path sourceDirectory;
     private final Config config;
     private final StabilityDetector stabilityDetector;
     private final ArchivePathResolver pathResolver;
@@ -41,13 +34,10 @@ final class SourceWatcher implements AutoCloseable {
     private final ArchiveRepository repository;
     private final Executor workers;
     private final ScheduledExecutorService scheduler;
+    private final SourceDetector detector;
     private final Set<Path> inFlight = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Path, Candidate> candidates = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean();
-    private final CountDownLatch stopped = new CountDownLatch(1);
-
-    private WatchService watchService;
-    private Thread watcherThread;
 
     SourceWatcher(
             Path sourceDirectory,
@@ -57,7 +47,6 @@ final class SourceWatcher implements AutoCloseable {
             ArchiveRepository repository,
             Executor workers,
             ScheduledExecutorService scheduler) {
-        this.sourceDirectory = sourceDirectory;
         this.config = config;
         this.stabilityDetector = new StabilityDetector(config.quietPeriodMillis());
         this.pathResolver = pathResolver;
@@ -65,107 +54,27 @@ final class SourceWatcher implements AutoCloseable {
         this.repository = repository;
         this.workers = workers;
         this.scheduler = scheduler;
+        this.detector = new SourceDetector(
+                sourceDirectory, scheduler, config.reconciliationIntervalSeconds(), this::accept);
     }
 
     void start() {
-        boolean watchServiceActive = initializeWatchService();
         running.set(true);
-
-        sweep("startup");
-        scheduler.scheduleAtFixedRate(
-                () -> sweep("periodic reconciliation"),
-                config.reconciliationIntervalSeconds(),
-                config.reconciliationIntervalSeconds(),
-                TimeUnit.SECONDS);
-
-        if (watchServiceActive) {
-            watcherThread = new Thread(this::watchLoop, "source-watcher");
-            watcherThread.start();
-        }
+        detector.start();
     }
 
     void awaitTermination() throws InterruptedException {
-        stopped.await();
+        detector.awaitTermination();
     }
 
     @Override
     public void close() {
         if (!running.getAndSet(false)) return;
-        WatchService activeWatchService = watchService;
-        if (activeWatchService != null) {
-            try {
-                activeWatchService.close();
-            } catch (IOException e) {
-                logger.warn("Could not close source WatchService cleanly", e);
-            }
-        }
-        if (watcherThread != null) watcherThread.interrupt();
-        stopped.countDown();
+        detector.close();
     }
 
-    private boolean initializeWatchService() {
-        WatchService candidate = null;
-        try {
-            candidate = sourceDirectory.getFileSystem().newWatchService();
-            sourceDirectory.register(candidate,
-                    StandardWatchEventKinds.ENTRY_CREATE,
-                    StandardWatchEventKinds.ENTRY_MODIFY);
-            watchService = candidate;
-            return true;
-        } catch (IOException | UnsupportedOperationException e) {
-            if (candidate != null) {
-                try {
-                    candidate.close();
-                } catch (IOException closeFailure) {
-                    e.addSuppressed(closeFailure);
-                }
-            }
-            watchService = null;
-            logger.warn("WatchService unavailable for source directory={}; "
-                    + "continuing with reconciliation-only detection", sourceDirectory, e);
-            return false;
-        }
-    }
-
-    private void watchLoop() {
-        try {
-            while (running.get()) {
-                WatchKey key = watchService.take();
-                for (WatchEvent<?> event : key.pollEvents()) {
-                    if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
-                        logger.warn("WatchService overflow detected; scheduling an immediate reconciliation sweep");
-                        scheduler.execute(() -> sweep("overflow reconciliation"));
-                        continue;
-                    }
-                    Path context = (Path) event.context();
-                    detect(sourceDirectory.resolve(context), "watch " + event.kind().name());
-                }
-                if (!key.reset()) {
-                    logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
-                    break;
-                }
-            }
-        } catch (ClosedWatchServiceException ignored) {
-            // Normal shutdown.
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } finally {
-            running.set(false);
-            stopped.countDown();
-        }
-    }
-
-    private void sweep(String reason) {
-        if (!running.get()) return;
-        try (var paths = Files.list(sourceDirectory)) {
-            paths.filter(Files::isRegularFile).forEach(path -> detect(path, reason));
-        } catch (IOException e) {
-            logger.error("Could not perform {} of source directory={}", reason, sourceDirectory, e);
-        }
-    }
-
-    private void detect(Path path, String reason) {
-        Path source = path.toAbsolutePath().normalize();
+    /** Takes one detected file and either starts tracking it or explains why not. */
+    private void accept(Path source, String reason) {
         String fileName = source.getFileName().toString();
         LocalDateTime timestamp;
         try {
@@ -212,7 +121,7 @@ final class SourceWatcher implements AutoCloseable {
             candidates.put(source, candidate);
             logger.info("Detected file={} detectedBy={} checkpoint={}", fileName, reason, checkpoint);
             if (snapshot.size() > checkpoint) {
-                scheduleCopy(candidate);
+                submit(candidate, this::copyAvailable);
             } else {
                 repository.markStaging(fileName, checkpoint);
                 candidate.markQuietFrom(snapshot);
@@ -226,10 +135,11 @@ final class SourceWatcher implements AutoCloseable {
         }
     }
 
-    private void scheduleCopy(Candidate candidate) {
+    /** Runs one exclusive pass over a candidate on a worker thread. */
+    private void submit(Candidate candidate, Consumer<Candidate> pass) {
         if (!running.get() || !candidate.workScheduled.compareAndSet(false, true)) return;
         try {
-            workers.execute(() -> copyAvailable(candidate));
+            workers.execute(() -> pass.accept(candidate));
         } catch (RuntimeException rejected) {
             candidate.workScheduled.set(false);
             fail(candidate, rejected);
@@ -272,7 +182,7 @@ final class SourceWatcher implements AutoCloseable {
 
         if (!copied || !running.get() || !candidates.containsKey(candidate.source)) return;
         if (afterCopy.size() > candidate.checkpoint) {
-            scheduleCopy(candidate);
+            submit(candidate, this::copyAvailable);
         } else {
             scheduleCheck(candidate, config.pollIntervalMillis());
         }
@@ -298,7 +208,7 @@ final class SourceWatcher implements AutoCloseable {
             StabilityDetector.Snapshot current = stabilityDetector.sample(candidate.source);
             requireNoShrink(candidate.source, current.size(), candidate.checkpoint);
             if (current.size() > candidate.checkpoint) {
-                scheduleCopy(candidate);
+                submit(candidate, this::copyAvailable);
                 return;
             }
 
@@ -306,22 +216,12 @@ final class SourceWatcher implements AutoCloseable {
                 candidate.markQuietFrom(current);
             }
             if (stabilityDetector.quietFor(candidate.quietSinceNanos, System.nanoTime())) {
-                schedulePublication(candidate);
+                submit(candidate, this::publish);
             } else {
                 scheduleCheck(candidate, config.pollIntervalMillis());
             }
         } catch (Exception failure) {
             fail(candidate, failure);
-        }
-    }
-
-    private void schedulePublication(Candidate candidate) {
-        if (!running.get() || !candidate.workScheduled.compareAndSet(false, true)) return;
-        try {
-            workers.execute(() -> publish(candidate));
-        } catch (RuntimeException rejected) {
-            candidate.workScheduled.set(false);
-            fail(candidate, rejected);
         }
     }
 
@@ -373,7 +273,7 @@ final class SourceWatcher implements AutoCloseable {
             candidate.workScheduled.set(false);
             if (retry && running.get() && candidates.containsKey(candidate.source)) {
                 if (candidate.stagedSnapshot.size() > candidate.checkpoint) {
-                    scheduleCopy(candidate);
+                    submit(candidate, this::copyAvailable);
                 } else {
                     scheduleCheck(candidate, config.pollIntervalMillis());
                 }

@@ -81,7 +81,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 28 functional tests, no database connection
+mvn test     # 33 functional tests, no database connection
 mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
 ```
 
@@ -105,11 +105,16 @@ shrink, or a replacement violates the producer contract; the row becomes
 
 ### Detection and complete files
 
-`WatchService` supplies low-latency `ENTRY_CREATE` and `ENTRY_MODIFY` events. It
-cannot recover events missed while the process was stopped and may overflow, so
-Astropipe also performs a startup listing and a periodic reconciliation listing.
-An explicit `OVERFLOW` schedules an immediate listing. If `WatchService` is
-unavailable altogether, detection falls back to listing alone.
+`SourceDetector` owns this and nothing else: it reports every regular file in the
+source directory, with how it was found, and leaves interpreting the name to the
+pipeline. `WatchService` supplies low-latency `ENTRY_CREATE` and `ENTRY_MODIFY`
+events. It cannot recover events missed while the process was stopped and may
+overflow, so a startup listing and a periodic reconciliation listing run
+alongside it. An explicit `OVERFLOW` schedules an immediate listing. If
+`WatchService` is unavailable altogether, detection falls back to listing alone.
+
+Keeping detection separate means it is testable on its own: `SourceDetectorTest`
+drives it with a plain callback and never opens a database.
 
 Creation does not mean a producer has closed the file. Source size and
 last-modified time are sampled on the scheduled thread. Growth submits another

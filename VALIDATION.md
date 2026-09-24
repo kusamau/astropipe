@@ -18,7 +18,7 @@ periods so the suite stays fast without becoming timing-dependent.
 
 | Requirement | Verified by |
 | --- | --- |
-| Monitor the source folder | `ArchiverIT.archivesStartupAndWatchEventsAndIgnoresMalformedFiles`, `ArchiverIT.fallsBackToReconciliationWhenWatchServiceIsUnavailable`, M1 |
+| Monitor the source folder | `SourceDetectorTest` (5 tests), `ArchiverIT.archivesStartupAndWatchEventsAndIgnoresMalformedFiles`, `ArchiverIT.fallsBackToReconciliationWhenWatchServiceIsUnavailable`, M1 |
 | Move images to the archive as fast as possible | `ArchiverIT.doesNotMoveFileWhileUnsafeGeneratorIsStillWriting`, M2 |
 | Log all file operations to a log file | M4 |
 | Use a JSON configuration file | `ConfigTest` (7 tests), M5 |
@@ -33,7 +33,7 @@ periods so the suite stays fast without becoming timing-dependent.
 `mvn verify` on Linux, Java 21, run 2026-09-24:
 
 ```
-Tests run: 28, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 33, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 16, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -46,6 +46,7 @@ BUILD SUCCESS
 | `FileMoverTest` | 4 | Ranged append, atomic publish, overlap mismatch, truncation to checkpoint, reset when staging is short |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
+| `SourceDetectorTest` | 5 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close |
 | `ArchiveRepositoryIT` | 7 | Dedupe key, archive bookkeeping, state transitions, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication returned to staging, resumable source kept, three unrecoverable crash shapes failed |
 | `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, reconciliation-only fallback, overlap mismatch, resume from checkpoint |
