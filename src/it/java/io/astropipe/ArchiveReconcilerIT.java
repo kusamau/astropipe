@@ -29,7 +29,8 @@ class ArchiveReconcilerIT {
     void setUp() throws Exception {
         source = Files.createDirectory(temporaryDirectory.resolve("source"));
         resolver = new ArchivePathResolver(Files.createDirectory(temporaryDirectory.resolve("archive")));
-        repository = new ArchiveRepository(openDatabase());
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(database);
         repository.initialize();
         reconciler = new ArchiveReconciler(source, resolver, fileMover, repository);
     }
@@ -91,11 +92,6 @@ class ArchiveReconcilerIT {
 
     private void claim(String... fileNames) {
         for (String fileName : fileNames) repository.claim(fileName, Instant.now());
-    }
-
-    private Database openDatabase() {
-        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
-        return database;
     }
 
     private Path destinationOf(String fileName) throws Exception {

@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.Statement;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,14 +17,12 @@ class ArchiveRepositoryIT {
     @TempDir
     Path temporaryDirectory;
 
-    private String databaseUrl;
     private ArchiveRepository repository;
     private Database database;
 
     @BeforeEach
     void setUp() {
-        databaseUrl = "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db");
-        database = new Database(databaseUrl);
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
     }
@@ -46,7 +39,7 @@ class ArchiveRepositoryIT {
         assertEquals(ArchiveRepository.Status.IN_PROGRESS, repository.claim(fileName, Instant.now()));
         assertEquals(ArchiveRepository.Status.IN_PROGRESS, repository.claim(fileName, Instant.now()));
 
-        assertEquals(1, queryInt("SELECT COUNT(*) FROM archived_file WHERE file_name = ?", fileName));
+        assertEquals(1, count("SELECT COUNT(*) FROM archived_file WHERE file_name = ?", fileName));
     }
 
     @Test
@@ -74,11 +67,11 @@ class ArchiveRepositoryIT {
 
         repository.markArchived(fileName, archiveDirectory, savedAt);
 
-        assertEquals("ARCHIVED", queryString("SELECT status FROM archived_file WHERE file_name = ?", fileName));
+        assertEquals("ARCHIVED", column("status", fileName));
         assertEquals(archiveDirectory.toString(),
-                queryString("SELECT archive_dir FROM archived_file WHERE file_name = ?", fileName));
+                column("archive_dir", fileName));
         assertEquals(savedAt.toString(),
-                queryString("SELECT saved_at FROM archived_file WHERE file_name = ?", fileName));
+                column("saved_at", fileName));
     }
 
     @Test
@@ -110,28 +103,23 @@ class ArchiveRepositoryIT {
     void runsInWalModeWithRelaxedSynchronousWrites() throws Exception {
         // journal_mode is persisted in the database file; synchronous is per-connection,
         // so it has to be read back on the connection the repository actually writes on.
-        assertEquals("wal", queryString("PRAGMA journal_mode").toLowerCase());
+        assertEquals("wal", database.queryOne("PRAGMA journal_mode", r -> r.getString(1)).toLowerCase());
         assertEquals(1, database.pragma("synchronous"));
     }
 
     @Test
     void rejectsTheLegacySchemaWithoutMutatingIt() throws Exception {
-        String legacyUrl = "jdbc:sqlite:" + temporaryDirectory.resolve("legacy.db");
-        try (Connection connection = DriverManager.getConnection(legacyUrl);
-             Statement statement = connection.createStatement()) {
-            statement.execute("""
-                    CREATE TABLE archived_file (
-                        file_name TEXT PRIMARY KEY,
-                        status TEXT NOT NULL,
-                        copied_bytes INTEGER NOT NULL DEFAULT 0,
-                        archive_dir TEXT,
-                        saved_at TEXT,
-                        first_seen_at TEXT NOT NULL
-                    )
-                    """);
-        }
-
-        Database legacyDatabase = new Database(legacyUrl);
+        Database legacyDatabase = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("legacy.db"));
+        legacyDatabase.execute("""
+                CREATE TABLE archived_file (
+                    file_name TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    copied_bytes INTEGER NOT NULL DEFAULT 0,
+                    archive_dir TEXT,
+                    saved_at TEXT,
+                    first_seen_at TEXT NOT NULL
+                )
+                """);
         Database.DatabaseException failure = assertThrows(Database.DatabaseException.class,
                 () -> new ArchiveRepository(legacyDatabase).initialize());
         legacyDatabase.close();
@@ -139,30 +127,12 @@ class ArchiveRepositoryIT {
         assertTrue(failure.getMessage().contains("create a fresh database"));
     }
 
-    private int queryInt(String sql, Object... parameters) throws Exception {
-        return query(sql, parameters).getAsInt();
+    private String column(String name, String fileName) {
+        return database.queryOne(
+                "SELECT " + name + " FROM archived_file WHERE file_name = ?", r -> r.getString(1), fileName);
     }
 
-    private String queryString(String sql, Object... parameters) throws Exception {
-        try (Connection connection = DriverManager.getConnection(databaseUrl);
-             PreparedStatement statement = bind(connection, sql, parameters);
-             ResultSet rows = statement.executeQuery()) {
-            return rows.next() ? rows.getString(1) : null;
-        }
-    }
-
-    private java.util.OptionalInt query(String sql, Object... parameters) throws Exception {
-        try (Connection connection = DriverManager.getConnection(databaseUrl);
-             PreparedStatement statement = bind(connection, sql, parameters);
-             ResultSet rows = statement.executeQuery()) {
-            return rows.next() ? java.util.OptionalInt.of(rows.getInt(1)) : java.util.OptionalInt.empty();
-        }
-    }
-
-    private static PreparedStatement bind(Connection connection, String sql, Object... parameters)
-            throws Exception {
-        PreparedStatement statement = connection.prepareStatement(sql);
-        for (int i = 0; i < parameters.length; i++) statement.setObject(i + 1, parameters[i]);
-        return statement;
+    private int count(String sql, Object... parameters) {
+        return database.queryOne(sql, r -> r.getInt(1), parameters);
     }
 }

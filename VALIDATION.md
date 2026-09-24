@@ -14,6 +14,12 @@ Timing is never asserted with a fixed sleep. Integration tests poll a condition
 until a deadline, and the pipeline is configured with short poll and quiet
 periods so the suite stays fast without becoming timing-dependent.
 
+The suites were also checked against deliberately broken production code, so that
+passing means something: breaking the deduplication guard, keeping a truncated
+publication instead of discarding it, and publishing without waiting for the quiet
+period were each caught, by `ArchiveRepositoryIT`, `ArchiveReconcilerIT` and
+`ArchiverIT` respectively.
+
 Nor may a test depend on how quickly `WatchService` reports a new file. That is a
 property of the platform — instant on Linux, polled on macOS, and unreliable over
 bind mounts and network filesystems — and the periodic listing exists precisely
@@ -53,6 +59,7 @@ BUILD SUCCESS
 | `ArchivePathResolverTest` | 2 | Zero-padded hierarchy, creation, year boundary |
 | `FileMoverTest` | 4 | Ranged append, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
+| `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
 | `SourceDetectorTest` | 5 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close |
 | `ArchiveRepositoryIT` | 7 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |

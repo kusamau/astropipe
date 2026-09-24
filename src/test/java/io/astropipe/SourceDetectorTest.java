@@ -6,7 +6,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -46,7 +45,7 @@ class SourceDetectorTest {
 
         Path appeared = Files.writeString(temporaryDirectory.resolve("SAT_IMG_20220101000000000.raw"), "x");
 
-        await(() -> detected.contains(appeared));
+        Await.until("the new file is reported", () -> detected.contains(appeared));
     }
 
     @Test
@@ -84,16 +83,4 @@ class SourceDetectorTest {
         detector.start();
     }
 
-    private static void await(BooleanSupplierWithException condition) throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (System.nanoTime() < deadline) {
-            if (condition.get()) return;
-            TimeUnit.MILLISECONDS.sleep(20);
-        }
-        assertTrue(condition.get(), "condition was not met within 5s");
-    }
-
-    private interface BooleanSupplierWithException {
-        boolean get() throws Exception;
-    }
 }

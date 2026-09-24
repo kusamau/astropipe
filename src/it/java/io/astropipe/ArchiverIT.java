@@ -11,7 +11,6 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -58,16 +57,16 @@ class ArchiverIT {
 
     @Test
     void archivesStartupAndWatchEventsAndIgnoresMalformedFiles() throws Exception {
-        Fixture fixture = startFixture(10, 50, "SAT_IMG_20211231235959999.raw");
+        Fixture fixture = start(config(10, 50), "SAT_IMG_20211231235959999.raw");
         Path startupDestination = fixture.archive.resolve(
                 "2021/12/31/SAT_IMG_20211231235959999.raw");
-        await(() -> Files.exists(startupDestination), Duration.ofSeconds(5));
+        Await.until("the startup file is archived", () -> Files.exists(startupDestination));
 
         Path watched = fixture.source.resolve("SAT_IMG_20220101000000000.raw");
         Files.writeString(watched, "watch event");
         Path watchedDestination = fixture.archive.resolve(
                 "2022/01/01/SAT_IMG_20220101000000000.raw");
-        await(() -> Files.exists(watchedDestination), Duration.ofSeconds(5));
+        Await.until("the watched file is archived", () -> Files.exists(watchedDestination));
 
         Path malformed = fixture.source.resolve("not-an-image.raw");
         Files.writeString(malformed, "ignored");
@@ -81,7 +80,7 @@ class ArchiverIT {
         // producer having stopped, and a write long enough to outlast detection. How
         // quickly WatchService reports a new file is a property of the platform - it is
         // instant on Linux and polled on macOS - so nothing here may depend on it.
-        Fixture fixture = startFixture(50, 800, null);
+        Fixture fixture = start(config(50, 800), null);
         String fileName = "SAT_IMG_20240229120000000.raw";
         Path source = fixture.source.resolve(fileName);
         Path destination = fixture.archive.resolve("2024/02/29").resolve(fileName);
@@ -113,7 +112,7 @@ class ArchiverIT {
         assertTrue(stagingSeen.get(),
                 "a growing source should be copied into archive-side staging as it grows");
 
-        await(() -> Files.exists(destination), Duration.ofSeconds(10));
+        Await.until("the image is published", () -> Files.exists(destination));
         assertEquals((long) chunks * CHUNK_SIZE, Files.size(destination));
         assertFalse(Files.exists(source), "the source is removed once its image is published");
         assertFalse(Files.exists(staging));
@@ -121,33 +120,32 @@ class ArchiverIT {
 
     @Test
     void fallsBackToReconciliationWhenWatchServiceIsUnavailable() throws Exception {
-        Fixture fixture = startFixtureWithUnavailableWatchService(
-                "SAT_IMG_20231231235959999.raw");
+        Fixture fixture = startWithoutWatchService("SAT_IMG_20231231235959999.raw");
         Path startupDestination = fixture.archive.resolve(
                 "2023/12/31/SAT_IMG_20231231235959999.raw");
-        await(() -> Files.exists(startupDestination), Duration.ofSeconds(5));
+        Await.until("the startup file is archived", () -> Files.exists(startupDestination));
 
         Path source = fixture.source.resolve("SAT_IMG_20240101000000000.raw");
         Files.writeString(source, "reconciliation fallback");
         Path destination = fixture.archive.resolve(
                 "2024/01/01/SAT_IMG_20240101000000000.raw");
-        await(() -> Files.exists(destination), Duration.ofSeconds(5));
+        Await.until("the image is published", () -> Files.exists(destination));
     }
 
     @Test
     void failsAndKeepsBothArtifactsWhenTheSourceShrinks() throws Exception {
-        Fixture fixture = startFixture(25, 2_000, null);
+        Fixture fixture = start(config(25, 2_000), null);
         String fileName = "SAT_IMG_20240301120000000.raw";
         Path source = Files.writeString(fixture.source.resolve(fileName), "abcdefgh");
         Path destination = fixture.archive.resolve("2024/03/01").resolve(fileName);
         Path staging = destination.resolveSibling(fileName + ".tmp");
-        await(() -> Files.exists(staging) && Files.size(staging) == 8, Duration.ofSeconds(5));
+        Await.until("the source is fully staged", () -> Files.exists(staging) && Files.size(staging) == 8);
 
         // An append-only source may never lose bytes it has already handed over.
         Files.writeString(source, "abcd", StandardOpenOption.TRUNCATE_EXISTING);
 
-        await(() -> fixture.repository.claim(fileName, Instant.now()) == ArchiveRepository.Status.FAILED,
-                Duration.ofSeconds(5));
+        Await.until("the ledger records the failure",
+                () -> repository.claim(fileName, Instant.now()) == ArchiveRepository.Status.FAILED);
         assertTrue(Files.exists(source));
         assertTrue(Files.exists(staging), "a failed transfer keeps its artifacts for inspection");
         assertFalse(Files.exists(destination));
@@ -159,29 +157,16 @@ class ArchiverIT {
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         String fileName = "SAT_IMG_20240302120000000.raw";
         Path source = Files.writeString(sourceDirectory.resolve(fileName), "abcdefgh");
-        ArchivePathResolver resolver = new ArchivePathResolver(archive);
-        Path destination = resolver.resolve(fileName, SatelliteImageName.parse(fileName));
+        Path destination = Files.createDirectories(archive.resolve("2024/03/02")).resolve(fileName);
         // Staging from a dead run, holding bytes that never matched the source.
         Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "ZZZZZZ");
 
-        repository = new ArchiveRepository(openDatabase());
-        repository.initialize();
-        workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
-        scheduler = Executors.newSingleThreadScheduledExecutor();
-        watcher = new SourceWatcher(
-                sourceDirectory, config(25, 50), resolver, new FileMover(), repository, workers, scheduler);
-        watcher.start();
+        start(sourceDirectory, archive, config(25, 50));
 
-        await(() -> Files.exists(destination), Duration.ofSeconds(5));
+        Await.until("the image is published", () -> Files.exists(destination));
         assertEquals("abcdefgh", Files.readString(destination));
         assertFalse(Files.exists(source));
         assertFalse(Files.exists(staging));
-    }
-
-    private Database openDatabase() {
-        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
-        return database;
     }
 
     /** Writes in place, slowly, running {@code afterEachChunk} once every chunk lands. */
@@ -199,64 +184,36 @@ class ArchiverIT {
         }
     }
 
-    private Fixture startFixture(int pollMillis, int quietMillis, String startupFile) throws Exception {
+    /** Starts a watcher over a fresh source and archive under the temporary directory. */
+    private Fixture start(Config config, String startupFile) throws Exception {
         Path source = Files.createDirectory(temporaryDirectory.resolve("source"));
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         if (startupFile != null) Files.writeString(source.resolve(startupFile), "startup");
+        return start(source, archive, config);
+    }
 
-        repository = new ArchiveRepository(openDatabase());
+    /** Starts a watcher over the given directories, which the caller has already prepared. */
+    private Fixture start(Path source, Path archive, Config config) throws Exception {
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(database);
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
         scheduler = Executors.newSingleThreadScheduledExecutor();
-        watcher = new SourceWatcher(
-                source,
-                config(pollMillis, quietMillis),
-                new ArchivePathResolver(archive),
-                new FileMover(),
-                repository,
-                workers,
-                scheduler);
+        watcher = new SourceWatcher(source, config, new ArchivePathResolver(archive),
+                new FileMover(), repository, workers, scheduler);
         watcher.start();
-        return new Fixture(source, archive, repository);
+        return new Fixture(source, archive);
     }
 
-    private Fixture startFixtureWithUnavailableWatchService(String startupFile) throws Exception {
+    /** A source on a zip filesystem, which supports no WatchService at all. */
+    private Fixture startWithoutWatchService(String startupFile) throws Exception {
         sourceFileSystem = FileSystems.newFileSystem(
                 temporaryDirectory.resolve("source.zip"), Map.of("create", "true"));
         Path source = Files.createDirectory(sourceFileSystem.getPath("/source"));
-        Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         Files.writeString(source.resolve(startupFile), "startup");
-
-        repository = new ArchiveRepository(openDatabase());
-        repository.initialize();
-        workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
-        scheduler = Executors.newSingleThreadScheduledExecutor();
-        watcher = new SourceWatcher(
-                source,
-                config(50, 100),
-                new ArchivePathResolver(archive),
-                new FileMover(),
-                repository,
-                workers,
-                scheduler);
-        watcher.start();
-        return new Fixture(source, archive, repository);
+        return start(source, Files.createDirectory(temporaryDirectory.resolve("archive")), config(50, 100));
     }
 
-    private static void await(CheckedCondition condition, Duration timeout) throws Exception {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (condition.evaluate()) return;
-            TimeUnit.MILLISECONDS.sleep(20);
-        }
-        assertTrue(condition.evaluate(), "condition was not met within " + timeout);
-    }
-
-    private interface CheckedCondition {
-        boolean evaluate() throws Exception;
-    }
-
-    private record Fixture(Path source, Path archive, ArchiveRepository repository) { }
+    private record Fixture(Path source, Path archive) { }
 }
