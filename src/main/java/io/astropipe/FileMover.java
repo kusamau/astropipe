@@ -9,15 +9,20 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
-public final class FileMover {
+/**
+ * Archive-side staging: append available source bytes into {@code <destination>.tmp},
+ * then publish with an atomic rename. Kept incremental so a very large image starts
+ * copying while the producer is still writing it.
+ */
+final class FileMover {
     private static final long MAX_TRANSFER_CHUNK = 2L * 1024 * 1024 * 1024 - 1;
     private static final int COMPARISON_BUFFER_SIZE = 64 * 1024;
 
-    public Path stagingPath(Path destination) {
+    Path stagingPath(Path destination) {
         return destination.resolveSibling(destination.getFileName() + ".tmp");
     }
 
-    public long normalizeStaging(Path staging, long checkpoint) throws IOException {
+    long normalizeStaging(Path staging, long checkpoint) throws IOException {
         if (!Files.exists(staging)) {
             Files.createFile(staging);
             return 0;
@@ -39,7 +44,7 @@ public final class FileMover {
         return checkpoint;
     }
 
-    public void validateOverlap(
+    void validateOverlap(
             Path source,
             Path staging,
             long resumeOffset,
@@ -64,7 +69,7 @@ public final class FileMover {
         }
     }
 
-    public long appendRange(Path source, Path staging, long from, long to) throws IOException {
+    long appendRange(Path source, Path staging, long from, long to) throws IOException {
         if (from < 0 || to < from) {
             throw new IllegalArgumentException("Invalid copy range " + from + ".." + to);
         }
@@ -90,14 +95,14 @@ public final class FileMover {
         }
     }
 
-    public void publish(Path staging, Path destination) throws IOException {
+    void publish(Path staging, Path destination) throws IOException {
         if (Files.exists(destination)) {
             throw new FileAlreadyExistsException(destination.toString());
         }
         Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE);
     }
 
-    public void rollbackPublication(Path destination, Path staging) throws IOException {
+    void rollbackPublication(Path destination, Path staging) throws IOException {
         if (Files.exists(staging)) {
             throw new FileAlreadyExistsException(staging.toString());
         }
@@ -126,8 +131,8 @@ public final class FileMover {
         buffer.flip();
     }
 
-    public static final class OverlapMismatchException extends IOException {
-        public OverlapMismatchException(Path source, Path staging, long from, long to) {
+    static final class OverlapMismatchException extends IOException {
+        OverlapMismatchException(Path source, Path staging, long from, long to) {
             super("Source and staging overlap differ for " + source + " and " + staging
                     + " over bytes " + from + ".." + to);
         }

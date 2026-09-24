@@ -1,6 +1,5 @@
 package io.astropipe;
 
-import io.astropipe.exception.InvalidSatelliteImageNameException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,24 +16,31 @@ import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class SourceWatcher implements AutoCloseable {
+/**
+ * Detects source images and drives each one through staging to the archive.
+ *
+ * <p>{@code WatchService} gives low-latency events but cannot report what happened while
+ * the process was down and may overflow, so a startup listing and a periodic listing run
+ * alongside it. A detected file is only published once its size and modification time have
+ * held still for the configured quiet period.
+ */
+final class SourceWatcher implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(SourceWatcher.class);
 
     private final Path sourceDirectory;
-    private final FileNameParser parser;
+    private final Config config;
     private final StabilityDetector stabilityDetector;
     private final ArchivePathResolver pathResolver;
     private final FileMover fileMover;
     private final ArchiveRepository repository;
-    private final ThreadPoolExecutor workers;
+    private final Executor workers;
     private final ScheduledExecutorService scheduler;
-    private final int reconciliationIntervalSeconds;
     private final Set<Path> inFlight = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Path, Candidate> candidates = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean();
@@ -43,36 +49,33 @@ public final class SourceWatcher implements AutoCloseable {
     private WatchService watchService;
     private Thread watcherThread;
 
-    public SourceWatcher(
+    SourceWatcher(
             Path sourceDirectory,
-            FileNameParser parser,
-            StabilityDetector stabilityDetector,
+            Config config,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository,
-            ThreadPoolExecutor workers,
-            ScheduledExecutorService scheduler,
-            int reconciliationIntervalSeconds) {
+            Executor workers,
+            ScheduledExecutorService scheduler) {
         this.sourceDirectory = sourceDirectory;
-        this.parser = parser;
-        this.stabilityDetector = stabilityDetector;
+        this.config = config;
+        this.stabilityDetector = new StabilityDetector(config.quietPeriodMillis());
         this.pathResolver = pathResolver;
         this.fileMover = fileMover;
         this.repository = repository;
         this.workers = workers;
         this.scheduler = scheduler;
-        this.reconciliationIntervalSeconds = reconciliationIntervalSeconds;
     }
 
-    public void start() throws IOException {
+    void start() {
         boolean watchServiceActive = initializeWatchService();
         running.set(true);
 
         sweep("startup");
         scheduler.scheduleAtFixedRate(
                 () -> sweep("periodic reconciliation"),
-                reconciliationIntervalSeconds,
-                reconciliationIntervalSeconds,
+                config.reconciliationIntervalSeconds(),
+                config.reconciliationIntervalSeconds(),
                 TimeUnit.SECONDS);
 
         if (watchServiceActive) {
@@ -81,8 +84,23 @@ public final class SourceWatcher implements AutoCloseable {
         }
     }
 
-    public void awaitTermination() throws InterruptedException {
+    void awaitTermination() throws InterruptedException {
         stopped.await();
+    }
+
+    @Override
+    public void close() {
+        if (!running.getAndSet(false)) return;
+        WatchService activeWatchService = watchService;
+        if (activeWatchService != null) {
+            try {
+                activeWatchService.close();
+            } catch (IOException e) {
+                logger.warn("Could not close source WatchService cleanly", e);
+            }
+        }
+        if (watcherThread != null) watcherThread.interrupt();
+        stopped.countDown();
     }
 
     private boolean initializeWatchService() {
@@ -119,9 +137,8 @@ public final class SourceWatcher implements AutoCloseable {
                         scheduler.execute(() -> sweep("overflow reconciliation"));
                         continue;
                     }
-                    @SuppressWarnings("unchecked")
-                    WatchEvent<Path> pathEvent = (WatchEvent<Path>) event;
-                    detect(sourceDirectory.resolve(pathEvent.context()), "watch " + event.kind().name());
+                    Path context = (Path) event.context();
+                    detect(sourceDirectory.resolve(context), "watch " + event.kind().name());
                 }
                 if (!key.reset()) {
                     logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
@@ -148,70 +165,71 @@ public final class SourceWatcher implements AutoCloseable {
     }
 
     private void detect(Path path, String reason) {
-        Path normalized = path.toAbsolutePath().normalize();
-        String fileName = normalized.getFileName().toString();
+        Path source = path.toAbsolutePath().normalize();
+        String fileName = source.getFileName().toString();
         LocalDateTime timestamp;
         try {
-            timestamp = parser.parse(normalized);
-        } catch (InvalidSatelliteImageNameException invalid) {
+            timestamp = SatelliteImageName.parse(fileName);
+        } catch (SatelliteImageName.InvalidNameException invalid) {
             logger.warn("Ignoring malformed source entry={} detectedBy={} reason={}",
-                    normalized, reason, invalid.getMessage());
+                    source, reason, invalid.getMessage());
             return;
         }
-        Candidate existing = candidates.get(normalized);
-        if (existing != null) {
-            scheduleCheck(existing, 0);
-            return;
-        }
-        if (!inFlight.add(normalized)) return;
 
+        Candidate tracked = candidates.get(source);
+        if (tracked != null) {
+            scheduleCheck(tracked, 0);
+            return;
+        }
+        if (!inFlight.add(source)) return;
+
+        ArchiveRepository.CopyRecord record;
         try {
-            ArchiveRepository.CopyRecord record = repository.beginOrResume(fileName, Instant.now());
-            if (record.terminal()) {
-                logger.debug("Ignoring terminal file={} status={} detectedBy={}",
-                        fileName, record.status(), reason);
-                inFlight.remove(normalized);
-                return;
-            }
+            record = repository.beginOrResume(fileName, Instant.now());
+        } catch (RuntimeException e) {
+            inFlight.remove(source);
+            logger.error("Could not claim file={} in the archive ledger", fileName, e);
+            return;
+        }
+        if (record.terminal()) {
+            inFlight.remove(source);
+            logger.debug("Ignoring terminal file={} status={} detectedBy={}",
+                    fileName, record.status(), reason);
+            return;
+        }
 
+        // The ledger row is active from here on, so every failure below has to close it out.
+        try {
             Path destination = pathResolver.resolve(fileName, timestamp);
             Path staging = fileMover.stagingPath(destination);
             long checkpoint = fileMover.normalizeStaging(staging, record.copiedBytes());
             if (checkpoint != record.copiedBytes()) repository.resetCheckpoint(fileName);
 
-            StabilityDetector.Snapshot snapshot = stabilityDetector.sample(normalized);
-            if (snapshot.size() < checkpoint) {
-                throw new IOException("Append-only source shrank below checkpoint for " + normalized
-                        + ": sourceSize=" + snapshot.size() + " checkpoint=" + checkpoint);
-            }
+            StabilityDetector.Snapshot snapshot = stabilityDetector.sample(source);
+            requireNoShrink(source, snapshot.size(), checkpoint);
 
-            Candidate candidate = new Candidate(normalized, fileName, destination, staging, checkpoint);
-            candidates.put(normalized, candidate);
+            Candidate candidate = new Candidate(source, fileName, destination, staging, checkpoint);
+            candidates.put(source, candidate);
             logger.info("Detected file={} detectedBy={} checkpoint={}", fileName, reason, checkpoint);
             if (snapshot.size() > checkpoint) {
                 scheduleCopy(candidate);
             } else {
                 repository.markStaging(fileName, checkpoint);
-                candidate.stagedSnapshot = snapshot;
-                candidate.quietSinceNanos = System.nanoTime();
-                scheduleCheck(candidate, stabilityDetector.pollIntervalMillis());
+                candidate.markQuietFrom(snapshot);
+                scheduleCheck(candidate, config.pollIntervalMillis());
             }
         } catch (Exception failure) {
-            try {
-                ArchiveRepository.CopyRecord record = repository.beginOrResume(fileName, Instant.now());
-                if (!record.terminal()) repository.markFailed(fileName);
-            } catch (RuntimeException updateFailure) {
-                failure.addSuppressed(updateFailure);
-            }
-            inFlight.remove(normalized);
-            logger.error("Could not initialize incremental copy for file={}", normalized, failure);
+            candidates.remove(source);
+            inFlight.remove(source);
+            markFailed(fileName, failure);
+            logger.error("Could not initialize incremental copy for file={}", source, failure);
         }
     }
 
     private void scheduleCopy(Candidate candidate) {
         if (!running.get() || !candidate.workScheduled.compareAndSet(false, true)) return;
         try {
-            workers.execute(new ArchiveTask(() -> copyAvailable(candidate)));
+            workers.execute(() -> copyAvailable(candidate));
         } catch (RuntimeException rejected) {
             candidate.workScheduled.set(false);
             fail(candidate, rejected);
@@ -231,12 +249,9 @@ public final class SourceWatcher implements AutoCloseable {
 
             StabilityDetector.Snapshot beforeCopy = stabilityDetector.sample(candidate.source);
             long checkpoint = candidate.checkpoint;
-            if (beforeCopy.size() < checkpoint) {
-                throw new IOException("Append-only source shrank below checkpoint for " + candidate.source
-                        + ": sourceSize=" + beforeCopy.size() + " checkpoint=" + checkpoint);
-            }
+            requireNoShrink(candidate.source, beforeCopy.size(), checkpoint);
             if (checkpoint > 0) {
-                long resumeOffset = Math.max(0, checkpoint - stabilityDetector.resumeOverlapBytes());
+                long resumeOffset = Math.max(0, checkpoint - config.resumeOverlapBytes());
                 fileMover.validateOverlap(candidate.source, candidate.staging, resumeOffset, checkpoint);
             }
 
@@ -245,8 +260,7 @@ public final class SourceWatcher implements AutoCloseable {
             repository.markStaging(candidate.fileName, copiedBytes);
             candidate.checkpoint = copiedBytes;
             afterCopy = stabilityDetector.sample(candidate.source);
-            candidate.stagedSnapshot = afterCopy;
-            candidate.quietSinceNanos = System.nanoTime();
+            candidate.markQuietFrom(afterCopy);
             copied = true;
             logger.info("Staged file={} copiedBytes={} appendedBytes={}",
                     candidate.fileName, copiedBytes, copiedBytes - checkpoint);
@@ -260,7 +274,7 @@ public final class SourceWatcher implements AutoCloseable {
         if (afterCopy.size() > candidate.checkpoint) {
             scheduleCopy(candidate);
         } else {
-            scheduleCheck(candidate, stabilityDetector.pollIntervalMillis());
+            scheduleCheck(candidate, config.pollIntervalMillis());
         }
     }
 
@@ -277,29 +291,24 @@ public final class SourceWatcher implements AutoCloseable {
         candidate.checkScheduled.set(false);
         if (!running.get() || !candidates.containsKey(candidate.source)) return;
         if (candidate.workScheduled.get()) {
-            scheduleCheck(candidate, stabilityDetector.pollIntervalMillis());
+            scheduleCheck(candidate, config.pollIntervalMillis());
             return;
         }
         try {
             StabilityDetector.Snapshot current = stabilityDetector.sample(candidate.source);
-            if (current.size() < candidate.checkpoint) {
-                throw new IOException("Append-only source shrank below checkpoint for " + candidate.source
-                        + ": sourceSize=" + current.size() + " checkpoint=" + candidate.checkpoint);
-            }
+            requireNoShrink(candidate.source, current.size(), candidate.checkpoint);
             if (current.size() > candidate.checkpoint) {
                 scheduleCopy(candidate);
                 return;
             }
 
-            long now = System.nanoTime();
             if (!stabilityDetector.unchanged(candidate.stagedSnapshot, current)) {
-                candidate.stagedSnapshot = current;
-                candidate.quietSinceNanos = now;
+                candidate.markQuietFrom(current);
             }
-            if (stabilityDetector.quietFor(candidate.quietSinceNanos, now)) {
+            if (stabilityDetector.quietFor(candidate.quietSinceNanos, System.nanoTime())) {
                 schedulePublication(candidate);
             } else {
-                scheduleCheck(candidate, stabilityDetector.pollIntervalMillis());
+                scheduleCheck(candidate, config.pollIntervalMillis());
             }
         } catch (Exception failure) {
             fail(candidate, failure);
@@ -309,7 +318,7 @@ public final class SourceWatcher implements AutoCloseable {
     private void schedulePublication(Candidate candidate) {
         if (!running.get() || !candidate.workScheduled.compareAndSet(false, true)) return;
         try {
-            workers.execute(new ArchiveTask(() -> publish(candidate)));
+            workers.execute(() -> publish(candidate));
         } catch (RuntimeException rejected) {
             candidate.workScheduled.set(false);
             fail(candidate, rejected);
@@ -324,8 +333,7 @@ public final class SourceWatcher implements AutoCloseable {
             StabilityDetector.Snapshot beforePublish = stabilityDetector.sample(candidate.source);
             if (beforePublish.size() != candidate.checkpoint
                     || !stabilityDetector.unchanged(candidate.stagedSnapshot, beforePublish)) {
-                candidate.stagedSnapshot = beforePublish;
-                candidate.quietSinceNanos = System.nanoTime();
+                candidate.markQuietFrom(beforePublish);
                 retry = true;
                 return;
             }
@@ -336,8 +344,7 @@ public final class SourceWatcher implements AutoCloseable {
             if (!stabilityDetector.unchanged(beforePublish, afterPublish)) {
                 fileMover.rollbackPublication(candidate.destination, candidate.staging);
                 published = false;
-                candidate.stagedSnapshot = afterPublish;
-                candidate.quietSinceNanos = System.nanoTime();
+                candidate.markQuietFrom(afterPublish);
                 retry = true;
                 return;
             }
@@ -349,9 +356,9 @@ public final class SourceWatcher implements AutoCloseable {
                 logger.error("Published file but could not mark it ARCHIVED; startup recovery will reconcile file={}",
                         candidate.fileName, databaseFailure);
             }
-            long durationMillis = (System.nanoTime() - started) / 1_000_000;
             logger.info("Archived file={} destination={} bytes={} durationMs={}",
-                    candidate.fileName, candidate.destination, candidate.checkpoint, durationMillis);
+                    candidate.fileName, candidate.destination, candidate.checkpoint,
+                    (System.nanoTime() - started) / 1_000_000);
             discard(candidate);
         } catch (Exception failure) {
             if (published && Files.exists(candidate.destination) && !Files.exists(candidate.staging)) {
@@ -368,7 +375,7 @@ public final class SourceWatcher implements AutoCloseable {
                 if (candidate.stagedSnapshot.size() > candidate.checkpoint) {
                     scheduleCopy(candidate);
                 } else {
-                    scheduleCheck(candidate, stabilityDetector.pollIntervalMillis());
+                    scheduleCheck(candidate, config.pollIntervalMillis());
                 }
             }
         }
@@ -376,14 +383,18 @@ public final class SourceWatcher implements AutoCloseable {
 
     private void fail(Candidate candidate, Exception failure) {
         if (!candidates.containsKey(candidate.source)) return;
-        try {
-            repository.markFailed(candidate.fileName);
-        } catch (RuntimeException updateFailure) {
-            failure.addSuppressed(updateFailure);
-        }
+        markFailed(candidate.fileName, failure);
         logger.error("Incremental archive operation failed for file={} staging={}",
                 candidate.source, candidate.staging, failure);
         discard(candidate);
+    }
+
+    private void markFailed(String fileName, Exception failure) {
+        try {
+            repository.markFailed(fileName);
+        } catch (RuntimeException updateFailure) {
+            failure.addSuppressed(updateFailure);
+        }
     }
 
     private void discard(Candidate candidate) {
@@ -391,19 +402,11 @@ public final class SourceWatcher implements AutoCloseable {
         inFlight.remove(candidate.source);
     }
 
-    @Override
-    public void close() {
-        if (!running.getAndSet(false)) return;
-        WatchService activeWatchService = watchService;
-        if (activeWatchService != null) {
-            try {
-                activeWatchService.close();
-            } catch (IOException e) {
-                logger.warn("Could not close source WatchService cleanly", e);
-            }
+    private static void requireNoShrink(Path source, long sourceSize, long checkpoint) throws IOException {
+        if (sourceSize < checkpoint) {
+            throw new IOException("Append-only source shrank below checkpoint for " + source
+                    + ": sourceSize=" + sourceSize + " checkpoint=" + checkpoint);
         }
-        if (watcherThread != null) watcherThread.interrupt();
-        stopped.countDown();
     }
 
     private static final class Candidate {
@@ -423,6 +426,12 @@ public final class SourceWatcher implements AutoCloseable {
             this.destination = destination;
             this.staging = staging;
             this.checkpoint = checkpoint;
+        }
+
+        /** Restarts the quiet period from this observation of the source. */
+        private void markQuietFrom(StabilityDetector.Snapshot snapshot) {
+            this.stagedSnapshot = snapshot;
+            this.quietSinceNanos = System.nanoTime();
         }
     }
 }

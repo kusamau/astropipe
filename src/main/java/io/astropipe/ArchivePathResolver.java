@@ -8,15 +8,16 @@ import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class ArchivePathResolver {
+/** Maps an image timestamp onto {@code <archive>/<Year>/<Month>/<Day>}, creating it on first use. */
+final class ArchivePathResolver {
     private final Path archiveRoot;
     private final Set<Path> preparedDirectories = ConcurrentHashMap.newKeySet();
 
-    public ArchivePathResolver(Path archiveRoot) {
+    ArchivePathResolver(Path archiveRoot) {
         this.archiveRoot = archiveRoot.toAbsolutePath().normalize();
     }
 
-    public Path resolve(String fileName, LocalDateTime timestamp) throws IOException {
+    Path resolve(String fileName, LocalDateTime timestamp) throws IOException {
         LocalDate date = timestamp.toLocalDate();
         Path directory = archiveRoot
                 .resolve("%04d".formatted(date.getYear()))

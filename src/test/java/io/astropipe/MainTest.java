@@ -7,37 +7,39 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MainTest {
     @TempDir
     Path temporaryDirectory;
 
     @Test
-    void createsMissingArchiveDirectoryWhenEnabled() throws Exception {
+    void createsMissingArchiveDirectoryWithParents() throws Exception {
         Path archive = temporaryDirectory.resolve("nested/archive");
 
-        Main.prepareArchiveDirectory(archive, true);
-
-        assertThat(archive).isDirectory();
+        assertEquals(archive, Main.directory(archive.toString(), "archiveDir", true));
+        assertTrue(Files.isDirectory(archive));
     }
 
     @Test
-    void rejectsMissingArchiveDirectoryWhenDisabled() {
-        Path archive = temporaryDirectory.resolve("archive");
+    void rejectsMissingSourceDirectory() {
+        Path source = temporaryDirectory.resolve("source");
 
-        assertThatThrownBy(() -> Main.prepareArchiveDirectory(archive, false))
-                .isInstanceOf(IOException.class)
-                .hasMessage("archiveDir directory does not exist: " + archive);
+        IOException failure = assertThrows(IOException.class,
+                () -> Main.directory(source.toString(), "sourceDir", false));
+
+        assertEquals("sourceDir is not an existing directory: " + source, failure.getMessage());
     }
 
     @Test
-    void rejectsArchivePathThatIsNotDirectory() throws Exception {
+    void rejectsPathThatIsNotADirectory() throws Exception {
         Path archive = Files.writeString(temporaryDirectory.resolve("archive"), "not a directory");
 
-        assertThatThrownBy(() -> Main.prepareArchiveDirectory(archive, true))
-                .isInstanceOf(IOException.class)
-                .hasMessage("archiveDir is not a directory: " + archive);
+        IOException failure = assertThrows(IOException.class,
+                () -> Main.directory(archive.toString(), "archiveDir", true));
+
+        assertEquals("archiveDir is not an existing directory: " + archive, failure.getMessage());
     }
 }

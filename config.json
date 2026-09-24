@@ -1,0 +1,13 @@
+{
+  "sourceDir": "./data/source",
+  "archiveDir": "./data/archive",
+  "databaseUrl": "jdbc:sqlite:./data/archive.db",
+
+  "pollIntervalMillis": 250,
+  "quietPeriodMillis": 250,
+  "resumeOverlapBytes": 65536,
+  "reconciliationIntervalSeconds": 30,
+
+  "workerPoolSize": 2,
+  "workerQueueCapacity": 10000
+}

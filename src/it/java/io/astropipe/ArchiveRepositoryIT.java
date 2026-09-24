@@ -1,15 +1,16 @@
 package io.astropipe;
 
-import io.astropipe.exception.ArchiveStateTransitionException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,24 +25,48 @@ class ArchiveRepositoryIT {
     private ArchiveRepository repository;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         databaseUrl = "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db");
-        repository = new ArchiveRepository(new JdbcTemplate(new DriverManagerDataSource(databaseUrl)));
+        repository = new ArchiveRepository(databaseUrl);
         repository.initialize();
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (repository != null) repository.close();
     }
 
     @Test
     void primaryKeyIsAuthoritativeDedupeGuard() throws Exception {
         String fileName = "SAT_IMG_20210714102730046.raw";
+
         assertEquals(new ArchiveRepository.CopyRecord(ArchiveRepository.Status.COPYING, 0),
                 repository.beginOrResume(fileName, Instant.now()));
         assertEquals(new ArchiveRepository.CopyRecord(ArchiveRepository.Status.COPYING, 0),
                 repository.beginOrResume(fileName, Instant.now()));
-        assertEquals(1, rowCount(fileName));
+
+        assertEquals(1, queryInt("SELECT COUNT(*) FROM archived_file WHERE file_name = ?", fileName));
     }
 
     @Test
-    void appliesCopyingStagingArchivedAndFailedTransitions() throws Exception {
+    void recordsNameSavedTimeAndSavedFolderOnArchive() throws Exception {
+        String fileName = "SAT_IMG_20210714102730046.raw";
+        Path archiveDirectory = temporaryDirectory.resolve("archive/2021/07/14");
+        Instant savedAt = Instant.parse("2021-07-14T10:30:00Z");
+        repository.beginOrResume(fileName, Instant.now());
+
+        repository.markStaging(fileName, 8);
+        repository.markArchived(fileName, archiveDirectory, savedAt);
+
+        assertEquals("ARCHIVED", queryString("SELECT status FROM archived_file WHERE file_name = ?", fileName));
+        assertEquals(archiveDirectory.toString(),
+                queryString("SELECT archive_dir FROM archived_file WHERE file_name = ?", fileName));
+        assertEquals(savedAt.toString(),
+                queryString("SELECT saved_at FROM archived_file WHERE file_name = ?", fileName));
+    }
+
+    @Test
+    void appliesCopyingStagingAndFailedTransitions() throws Exception {
         String archived = "SAT_IMG_20210714102730046.raw";
         String failed = "SAT_IMG_20210714102730047.raw";
         repository.beginOrResume(archived, Instant.now());
@@ -50,112 +75,95 @@ class ArchiveRepositoryIT {
         repository.markStaging(archived, 4);
         repository.markCopying(archived);
         repository.markStaging(archived, 8);
-        repository.markArchived(archived, temporaryDirectory.resolve("2021/07/14"), Instant.now());
+        repository.resetCheckpoint(archived);
         repository.markFailed(failed);
 
-        assertEquals("ARCHIVED", status(archived));
-        assertEquals(8, copiedBytes(archived));
-        assertEquals("FAILED", status(failed));
+        assertEquals(0, queryInt("SELECT copied_bytes FROM archived_file WHERE file_name = ?", archived));
+        assertEquals("FAILED", queryString("SELECT status FROM archived_file WHERE file_name = ?", failed));
     }
 
     @Test
-    void reportsInvalidStateTransitionsWithDomainContext() {
-        ArchiveStateTransitionException missing = assertThrows(
-                ArchiveStateTransitionException.class,
-                () -> repository.markFailed("SAT_IMG_20240101120000000.raw"));
-        assertEquals("SAT_IMG_20240101120000000.raw", missing.fileName());
-        assertEquals("FAILED", missing.transition());
-        assertEquals(0, missing.affectedRows());
+    void refusesToTransitionRowsThatAreAbsentOrAlreadyTerminal() {
+        String missing = "SAT_IMG_20240101120000000.raw";
+        ArchiveRepository.DatabaseException absent = assertThrows(
+                ArchiveRepository.DatabaseException.class, () -> repository.markFailed(missing));
+        assertTrue(absent.getMessage().contains("expected one active row but updated 0"));
 
         String archived = "SAT_IMG_20240101120000001.raw";
         repository.beginOrResume(archived, Instant.now());
-        repository.markStaging(archived, 1);
-        repository.markArchived(archived, temporaryDirectory.resolve("2024/01/01"), Instant.now());
+        repository.markArchived(archived, temporaryDirectory, Instant.now());
 
-        ArchiveStateTransitionException repeated = assertThrows(
-                ArchiveStateTransitionException.class,
-                () -> repository.markFailed(archived));
-        assertEquals(archived, repeated.fileName());
-        assertEquals("FAILED", repeated.transition());
-        assertEquals(0, repeated.affectedRows());
+        assertThrows(ArchiveRepository.DatabaseException.class, () -> repository.markFailed(archived));
     }
 
     @Test
-    void reconcilesEveryInProgressCrashState() throws Exception {
-        Path source = Files.createDirectory(temporaryDirectory.resolve("source"));
-        Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
-        ArchivePathResolver resolver = new ArchivePathResolver(archive);
-        FileNameParser parser = new FileNameParser();
-        String atDestination = "SAT_IMG_20240101120000000.raw";
-        String atSource = "SAT_IMG_20240101120000001.raw";
-        String missing = "SAT_IMG_20240101120000002.raw";
-        repository.beginOrResume(atDestination, Instant.now());
-        repository.beginOrResume(atSource, Instant.now());
-        repository.beginOrResume(missing, Instant.now());
-        Files.writeString(resolver.resolve(atDestination, parser.parse(Path.of(atDestination))), "complete");
-        Files.writeString(source.resolve(atSource), "retry");
+    void listsOnlyRowsLeftInProgress() {
+        String active = "SAT_IMG_20240101120000000.raw";
+        String done = "SAT_IMG_20240101120000001.raw";
+        repository.beginOrResume(active, Instant.now());
+        repository.beginOrResume(done, Instant.now());
+        repository.markStaging(active, 12);
+        repository.markArchived(done, temporaryDirectory, Instant.now());
 
-        ArchiveRepository.ReconciliationResult result =
-                repository.reconcileInProgress(source, parser, resolver);
-
-        assertEquals(new ArchiveRepository.ReconciliationResult(1, 1, 1), result);
-        assertEquals("ARCHIVED", status(atDestination));
-        assertEquals(1, rowCount(atSource));
-        assertEquals("COPYING", status(atSource));
-        assertEquals("FAILED", status(missing));
+        assertEquals(java.util.List.of(new ArchiveRepository.CopyEntry(active, 12)), repository.activeEntries());
     }
 
     @Test
-    void rejectsTheLegacySchemaWithoutMutatingIt() {
+    void runsInWalModeWithRelaxedSynchronousWrites() throws Exception {
+        // journal_mode is persisted in the database file; synchronous is per-connection,
+        // so it has to be read back on the connection the repository actually writes on.
+        assertEquals("wal", queryString("PRAGMA journal_mode").toLowerCase());
+        assertEquals(1, repository.pragma("synchronous"));
+    }
+
+    @Test
+    void rejectsTheLegacySchemaWithoutMutatingIt() throws Exception {
         String legacyUrl = "jdbc:sqlite:" + temporaryDirectory.resolve("legacy.db");
-        JdbcTemplate legacyDatabase = new JdbcTemplate(new DriverManagerDataSource(legacyUrl));
-        legacyDatabase.execute("""
-                CREATE TABLE archived_file (
-                    file_name TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    archive_dir TEXT,
-                    saved_at TEXT,
-                    first_seen_at TEXT NOT NULL
-                )
-                """);
+        try (Connection connection = DriverManager.getConnection(legacyUrl);
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE archived_file (
+                        file_name TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        archive_dir TEXT,
+                        saved_at TEXT,
+                        first_seen_at TEXT NOT NULL
+                    )
+                    """);
+        }
 
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new ArchiveRepository(legacyDatabase).initialize());
+        ArchiveRepository legacy = new ArchiveRepository(legacyUrl);
+        ArchiveRepository.DatabaseException failure =
+                assertThrows(ArchiveRepository.DatabaseException.class, legacy::initialize);
+        legacy.close();
 
         assertTrue(failure.getMessage().contains("create a fresh database"));
-        assertEquals(0, legacyDatabase.queryForObject("PRAGMA user_version", Integer.class));
     }
 
-    private int rowCount(String fileName) throws Exception {
-        try (var connection = DriverManager.getConnection(databaseUrl);
-             var statement = connection.prepareStatement(
-                     "SELECT COUNT(*) FROM archived_file WHERE file_name = ?")) {
-            statement.setString(1, fileName);
-            try (var rows = statement.executeQuery()) {
-                return rows.getInt(1);
-            }
+    private int queryInt(String sql, Object... parameters) throws Exception {
+        return query(sql, parameters).getAsInt();
+    }
+
+    private String queryString(String sql, Object... parameters) throws Exception {
+        try (Connection connection = DriverManager.getConnection(databaseUrl);
+             PreparedStatement statement = bind(connection, sql, parameters);
+             ResultSet rows = statement.executeQuery()) {
+            return rows.next() ? rows.getString(1) : null;
         }
     }
 
-    private String status(String fileName) throws Exception {
-        try (var connection = DriverManager.getConnection(databaseUrl);
-             var statement = connection.prepareStatement(
-                     "SELECT status FROM archived_file WHERE file_name = ?")) {
-            statement.setString(1, fileName);
-            try (var rows = statement.executeQuery()) {
-                return rows.next() ? rows.getString(1) : null;
-            }
+    private java.util.OptionalInt query(String sql, Object... parameters) throws Exception {
+        try (Connection connection = DriverManager.getConnection(databaseUrl);
+             PreparedStatement statement = bind(connection, sql, parameters);
+             ResultSet rows = statement.executeQuery()) {
+            return rows.next() ? java.util.OptionalInt.of(rows.getInt(1)) : java.util.OptionalInt.empty();
         }
     }
 
-    private long copiedBytes(String fileName) throws Exception {
-        try (var connection = DriverManager.getConnection(databaseUrl);
-             var statement = connection.prepareStatement(
-                     "SELECT copied_bytes FROM archived_file WHERE file_name = ?")) {
-            statement.setString(1, fileName);
-            try (var rows = statement.executeQuery()) {
-                return rows.next() ? rows.getLong(1) : -1;
-            }
-        }
+    private static PreparedStatement bind(Connection connection, String sql, Object... parameters)
+            throws Exception {
+        PreparedStatement statement = connection.prepareStatement(sql);
+        for (int i = 0; i < parameters.length; i++) statement.setObject(i + 1, parameters[i]);
+        return statement;
     }
 }

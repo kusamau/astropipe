@@ -1,11 +1,8 @@
 package io.astropipe;
 
-import io.astropipe.config.props.StabilityProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -36,6 +33,7 @@ class ArchiverIT {
     private ThreadPoolExecutor workers;
     private ScheduledExecutorService scheduler;
     private FileSystem sourceFileSystem;
+    private ArchiveRepository repository;
 
     @AfterEach
     void tearDown() throws Exception {
@@ -45,7 +43,13 @@ class ArchiverIT {
             workers.shutdown();
             workers.awaitTermination(5, TimeUnit.SECONDS);
         }
+        if (repository != null) repository.close();
         if (sourceFileSystem != null) sourceFileSystem.close();
+    }
+
+    /** The pipeline settings the watcher reads, tuned down so tests stay fast. */
+    private static Config config(int pollMillis, int quietMillis, int overlapBytes) {
+        return new Config("source", "archive", null, pollMillis, quietMillis, overlapBytes, 1, 2, 100);
     }
 
     @Test
@@ -139,12 +143,10 @@ class ArchiverIT {
         String fileName = "SAT_IMG_20240302120000000.raw";
         Path source = Files.writeString(sourceDirectory.resolve(fileName), "abcdefgh");
         ArchivePathResolver resolver = new ArchivePathResolver(archive);
-        Path destination = resolver.resolve(fileName, new FileNameParser().parse(source));
+        Path destination = resolver.resolve(fileName, SatelliteImageName.parse(fileName));
         Path staging = Files.writeString(destination.resolveSibling(fileName + ".tmp"), "abcdZZ");
 
-        var dataSource = new DriverManagerDataSource(
-                "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
-        ArchiveRepository repository = new ArchiveRepository(new JdbcTemplate(dataSource));
+        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository.initialize();
         repository.beginOrResume(fileName, Instant.now());
         repository.markStaging(fileName, 4);
@@ -153,14 +155,12 @@ class ArchiverIT {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
                 sourceDirectory,
-                new FileNameParser(),
-                new StabilityDetector(new StabilityProperties(25, 50, 4)),
+                config(25, 50, 4),
                 resolver,
                 new FileMover(),
                 repository,
                 workers,
-                scheduler,
-                1);
+                scheduler);
         watcher.start();
 
         await(() -> Files.exists(destination), Duration.ofSeconds(5));
@@ -192,23 +192,19 @@ class ArchiverIT {
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         if (startupFile != null) Files.writeString(source.resolve(startupFile), "startup");
 
-        var dataSource = new DriverManagerDataSource(
-                "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
-        ArchiveRepository repository = new ArchiveRepository(new JdbcTemplate(dataSource));
+        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
                 source,
-                new FileNameParser(),
-                new StabilityDetector(new StabilityProperties(pollMillis, quietMillis, overlapBytes)),
+                config(pollMillis, quietMillis, overlapBytes),
                 new ArchivePathResolver(archive),
                 new FileMover(),
                 repository,
                 workers,
-                scheduler,
-                1);
+                scheduler);
         watcher.start();
         return new Fixture(source, archive, repository);
     }
@@ -220,23 +216,19 @@ class ArchiverIT {
         Path archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         Files.writeString(source.resolve(startupFile), "startup");
 
-        var dataSource = new DriverManagerDataSource(
-                "jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
-        ArchiveRepository repository = new ArchiveRepository(new JdbcTemplate(dataSource));
+        repository = new ArchiveRepository("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository.initialize();
         workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(
                 source,
-                new FileNameParser(),
-                new StabilityDetector(new StabilityProperties(50, 100, 4)),
+                config(50, 100, 4),
                 new ArchivePathResolver(archive),
                 new FileMover(),
                 repository,
                 workers,
-                scheduler,
-                1);
+                scheduler);
         watcher.start();
         return new Fixture(source, archive, repository);
     }
