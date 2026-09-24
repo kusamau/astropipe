@@ -91,6 +91,32 @@ mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
 
 See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
 
+## The code
+
+Eleven classes in one package. They are kept package-private wherever possible —
+only `Main` and `Config` are public — so the compiler enforces that nothing here
+is reachable from outside. That is worth more at this size than a directory per
+layer would be, but it does mean an alphabetical file listing scatters related
+things, so here is the map:
+
+| Role | Class |
+| --- | --- |
+| Entry point and wiring | `Main` |
+| Configuration | `Config` |
+| Noticing files | `SourceDetector` |
+| Deciding what happens to one | `SourceWatcher` |
+| Startup recovery | `ArchiveReconciler` |
+| Naming and placement | `SatelliteImageName`, `ArchivePathResolver` |
+| Knowing a file is finished | `StabilityDetector` |
+| Moving bytes | `FileMover` |
+| The archive ledger | `ArchiveRepository` |
+| JDBC, with no domain knowledge | `Database` |
+
+An image travels through them in that order: `SourceDetector` reports every
+regular file it sees, `SourceWatcher` decides whether it is an image worth
+claiming and drives it from staging to publication, and `ArchiveReconciler`
+picks up whatever a previous run left behind.
+
 ## Design decisions
 
 ### Incremental archive-side staging
