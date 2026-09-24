@@ -65,29 +65,33 @@ public final class Main {
                 result.archived(), result.resumable(), result.failed());
     }
 
-    /** Runs the pipeline until a shutdown signal arrives, then drains it. */
+    /**
+     * Runs the pipeline until a shutdown signal arrives, then drains it.
+     *
+     * <p>The three are closed in reverse order of declaration, which is the order teardown
+     * needs: the watcher stops accepting work, the scheduler stops polling, and the workers
+     * finish what they hold — all before {@link #run} closes the database under them.
+     */
     private static void archiveUntilStopped(
             Config config,
             Path sourceDirectory,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        ThreadPoolExecutor workers = newWorkerPool(config);
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-                Thread.ofPlatform().name("reconciliation-", 1).factory());
-        SourceWatcher watcher = new SourceWatcher(
-                sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler);
-
-        try {
+        try (ThreadPoolExecutor workers = newWorkerPool(config);
+             ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+                     Thread.ofPlatform().name("reconciliation-", 1).factory());
+             SourceWatcher watcher = new SourceWatcher(
+                     sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler)) {
             watcher.start();
             // Only now can close() do anything: before start() it short-circuits, so a
             // signal arriving here would have left a running watcher no hook could stop.
             stopOnShutdownSignal(watcher);
             logger.info("Monitoring source directory={}", sourceDirectory);
             watcher.awaitTermination();
-        } finally {
-            shutDown(watcher, scheduler, workers);
+            logger.info("Shutdown started");
         }
+        logger.info("Shutdown complete");
     }
 
     private static ThreadPoolExecutor newWorkerPool(Config config) {
@@ -101,15 +105,6 @@ public final class Main {
                 new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
-    private static void shutDown(
-            SourceWatcher watcher, ScheduledExecutorService scheduler, ThreadPoolExecutor workers) {
-        logger.info("Shutdown started");
-        watcher.close();
-        scheduler.shutdownNow();
-        drain(workers);
-        logger.info("Shutdown complete");
-    }
-
     /** Unblocks the main thread on Ctrl-C or SIGTERM, then waits for it to drain. */
     private static void stopOnShutdownSignal(SourceWatcher watcher) {
         Thread mainThread = Thread.currentThread();
@@ -121,19 +116,6 @@ public final class Main {
                 Thread.currentThread().interrupt();
             }
         }, "astropipe-shutdown"));
-    }
-
-    private static void drain(ThreadPoolExecutor workers) {
-        workers.shutdown();
-        try {
-            if (!workers.awaitTermination(30, TimeUnit.SECONDS)) {
-                logger.warn("Worker drain timed out; interrupting remaining work");
-                workers.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            workers.shutdownNow();
-        }
     }
 
     static Path directory(String configured, String setting, boolean createIfMissing) throws IOException {
