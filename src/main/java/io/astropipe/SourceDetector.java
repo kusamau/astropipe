@@ -14,7 +14,6 @@ import java.nio.file.WatchService;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 
 /**
@@ -35,8 +34,12 @@ final class SourceDetector implements AutoCloseable {
     private final ScheduledExecutorService scheduler;
     private final int listingIntervalSeconds;
     private final BiConsumer<Path, String> onDetected;
-    private final AtomicBoolean running = new AtomicBoolean();
     private final CountDownLatch stopped = new CountDownLatch(1);
+
+    private volatile boolean running;
+    /** Guarded by {@code this}; separate from {@link #running} so cleanup still runs
+     *  when the watch loop has already stopped itself. */
+    private boolean closed;
 
     private WatchService watchService;
     private Thread watcherThread;
@@ -55,7 +58,7 @@ final class SourceDetector implements AutoCloseable {
     /** Reports everything already present, then keeps reporting until closed. */
     void start() {
         boolean watchServiceActive = initializeWatchService();
-        running.set(true);
+        running = true;
 
         sweep("startup");
         scheduler.scheduleAtFixedRate(
@@ -75,8 +78,10 @@ final class SourceDetector implements AutoCloseable {
     }
 
     @Override
-    public void close() {
-        if (!running.getAndSet(false)) return;
+    public synchronized void close() {
+        if (closed) return;
+        closed = true;
+        running = false;
         WatchService activeWatchService = watchService;
         if (activeWatchService != null) {
             try {
@@ -115,7 +120,7 @@ final class SourceDetector implements AutoCloseable {
 
     private void watchLoop() {
         try {
-            while (running.get()) {
+            while (running) {
                 WatchKey key = watchService.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
                     if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
@@ -136,13 +141,13 @@ final class SourceDetector implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            running.set(false);
+            running = false;
             stopped.countDown();
         }
     }
 
     private void sweep(String reason) {
-        if (!running.get()) return;
+        if (!running) return;
         try (var paths = Files.list(sourceDirectory)) {
             paths.filter(Files::isRegularFile).forEach(path -> report(path, reason));
         } catch (IOException e) {

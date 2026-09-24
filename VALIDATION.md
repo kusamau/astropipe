@@ -177,6 +177,36 @@ Archived file=SAT_IMG_...raw bytes=41943040 durationMs=4
 
 MD5 of source and of the archived copy: `4502163cc345866f84ac377adc3526e6`.
 
+### M9 — Concurrent burst keeps every image intact
+
+1. Prepare 200 distinct images with known MD5s.
+2. Drop them into the source directory from eight concurrent writers, each using
+   the staging-plus-atomic-rename producer contract.
+
+**Expected:** all 200 archived under the date of their own timestamp, byte-exact,
+no duplicates, no losses, no leftover `.tmp`, and one `ARCHIVED` ledger row each
+carrying a saved folder and saved time.
+**Observed:** pass.
+
+```
+expected: 200   archived files: 200
+missing: 0      unexpected: 0     checksum mismatches: 0
+wrong date folder: 0
+ledger rows: [('ARCHIVED', 200)]
+rows missing archive_dir or saved_at: 0
+leftover .tmp: 0   errors in log: 0
+```
+
+The run also confirms the threading contract. Every state-changing event was
+logged by the single scheduler thread:
+
+```
+Detected file=   [reconciliation-1]  (count: 200)
+Staged file=     [reconciliation-1]  (count: 200)
+Archived file=   [reconciliation-1]  (count: 200)
+threads in log:  1000 x [reconciliation-1], 7 x [main]
+```
+
 ## Known gaps
 
 - An image interrupted mid-copy is copied again from the beginning on restart.

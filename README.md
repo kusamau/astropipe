@@ -151,14 +151,28 @@ allow concurrently anyway.
 
 ### Concurrency and backpressure
 
-One thread blocks in the watch loop and one scheduled thread handles
-quiet-period sampling and reconciliation. Copy and publication work uses a fixed
-pool with a bounded `ArrayBlockingQueue` and `CallerRunsPolicy`. When the queue
-fills, the submitting thread performs the work and naturally slows intake
-instead of growing the heap without limit.
+One thread blocks in the watch loop and one scheduled thread owns the pipeline.
+Copy and publication work uses a fixed pool with a bounded `ArrayBlockingQueue`
+and `CallerRunsPolicy`. When the queue fills, the submitting thread performs the
+work and naturally slows intake instead of growing the heap without limit.
 
 Two workers are the default because copy parallelism depends on the source and
 archive devices; both pool size and queue capacity are configurable.
+
+**All per-file state is confined to the scheduler thread.** It alone decides what
+happens to a tracked image and mutates its record; workers run blocking I/O,
+return a value, and touch nothing shared. Handing work to an executor and posting
+the result back supplies the happens-before edges in both directions, so
+`SourceWatcher` needs no locks, no atomics and no `volatile` — a plain `HashMap`
+and plain fields. The invariant that makes it safe is that a tracked file has at
+most one outstanding action, which holds structurally because only one method
+chooses the next one.
+
+One consequence worth knowing: because the scheduler submits the work, a full
+worker queue makes `CallerRunsPolicy` run a copy on the scheduler thread, pausing
+quiet-period polling until it finishes. Publication is delayed, never incorrect —
+the quiet period is a floor, not a ceiling — and the default queue holds 10,000
+entries.
 
 ## What I deliberately did not build
 

@@ -8,21 +8,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
  * Drives each detected image through staging to the archive.
  *
- * <p>Finding files is {@link SourceDetector}'s job; this class decides what happens to
- * one once it has been found. A detected file is only published after its size and
- * modification time have held still for the configured quiet period.
+ * <p>Finding files is {@link SourceDetector}'s job; this class decides what happens to one
+ * once it has been found. A detected file is only published after its size and modification
+ * time have held still for the configured quiet period.
+ *
+ * <h2>Threading</h2>
+ * Every decision and every mutation of a {@link Candidate} happens on the single scheduler
+ * thread, which owns {@link #candidates}. Worker threads run blocking I/O only: they read
+ * fields the scheduler wrote before dispatch, return a value, and never mutate shared state.
+ * Handing work to an executor and posting the result back establishes the happens-before
+ * edges in both directions, so none of this needs locks, atomics or {@code volatile}.
+ *
+ * <p>The invariant that keeps it simple: <strong>a tracked file has at most one outstanding
+ * action</strong> — one worker pass or one scheduled poll, never both, never two. It holds
+ * structurally, because only {@link #advance} chooses the next action and it runs only after
+ * the previous one has completed. Preserve that and no guard flag is needed; break it and no
+ * guard flag would save you.
  */
 final class SourceWatcher implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(SourceWatcher.class);
@@ -35,9 +48,11 @@ final class SourceWatcher implements AutoCloseable {
     private final Executor workers;
     private final ScheduledExecutorService scheduler;
     private final SourceDetector detector;
-    private final Set<Path> inFlight = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<Path, Candidate> candidates = new ConcurrentHashMap<>();
-    private final AtomicBoolean running = new AtomicBoolean();
+
+    /** Scheduler thread only. */
+    private final Map<Path, Candidate> candidates = new HashMap<>();
+
+    private volatile boolean running;
 
     SourceWatcher(
             Path sourceDirectory,
@@ -55,11 +70,11 @@ final class SourceWatcher implements AutoCloseable {
         this.workers = workers;
         this.scheduler = scheduler;
         this.detector = new SourceDetector(
-                sourceDirectory, scheduler, config.reconciliationIntervalSeconds(), this::accept);
+                sourceDirectory, scheduler, config.reconciliationIntervalSeconds(), this::onDetected);
     }
 
     void start() {
-        running.set(true);
+        running = true;
         detector.start();
     }
 
@@ -68,14 +83,24 @@ final class SourceWatcher implements AutoCloseable {
     }
 
     @Override
-    public void close() {
-        if (!running.getAndSet(false)) return;
+    public synchronized void close() {
+        if (!running) return;
+        running = false;
         detector.close();
     }
 
-    /** Takes one detected file and either starts tracking it or explains why not. */
-    private void accept(Path source, String reason) {
+    /** Detector callback, on any thread: hand the file to its owner. */
+    private void onDetected(Path source, String reason) {
+        onSchedulerThread(() -> admit(source, reason));
+    }
+
+    // ---------------------------------------------------------------- scheduler thread only
+
+    /** Claims a newly seen file and starts tracking it. */
+    private void admit(Path source, String reason) {
+        if (candidates.containsKey(source)) return;
         String fileName = source.getFileName().toString();
+
         LocalDateTime timestamp;
         try {
             timestamp = SatelliteImageName.parse(fileName);
@@ -85,191 +110,118 @@ final class SourceWatcher implements AutoCloseable {
             return;
         }
 
-        Candidate tracked = candidates.get(source);
-        if (tracked != null) {
-            scheduleCheck(tracked, 0);
-            return;
-        }
-        if (!inFlight.add(source)) return;
-
         ArchiveRepository.Status status;
         try {
             status = repository.claim(fileName, Instant.now());
         } catch (RuntimeException e) {
-            inFlight.remove(source);
             logger.error("Could not claim file={} in the archive ledger", fileName, e);
             return;
         }
         if (status.terminal()) {
-            inFlight.remove(source);
             logger.debug("Ignoring terminal file={} status={} detectedBy={}", fileName, status, reason);
             return;
         }
 
-        // The ledger row is active from here on, so every failure below has to close it out.
+        // The ledger row is in progress from here on, so a failure below has to close it out.
+        Candidate candidate;
         try {
             Path destination = pathResolver.resolve(fileName, timestamp);
             Path staging = fileMover.stagingPath(destination);
             fileMover.createStaging(staging);
-
-            Candidate candidate = new Candidate(source, fileName, destination, staging);
-            candidates.put(source, candidate);
-            logger.info("Detected file={} detectedBy={}", fileName, reason);
-            StabilityDetector.Snapshot snapshot = stabilityDetector.sample(source);
-            if (snapshot.size() > 0) {
-                submit(candidate, this::copyAvailable);
-            } else {
-                candidate.markQuietFrom(snapshot);
-                scheduleCheck(candidate, config.pollIntervalMillis());
-            }
+            candidate = new Candidate(source, fileName, destination, staging);
         } catch (Exception failure) {
-            candidates.remove(source);
-            inFlight.remove(source);
             markFailed(fileName, failure);
-            logger.error("Could not initialize incremental copy for file={}", source, failure);
-        }
-    }
-
-    /** Runs one exclusive pass over a candidate on a worker thread. */
-    private void submit(Candidate candidate, Consumer<Candidate> pass) {
-        if (!running.get() || !candidate.workScheduled.compareAndSet(false, true)) return;
-        try {
-            workers.execute(() -> pass.accept(candidate));
-        } catch (RuntimeException rejected) {
-            candidate.workScheduled.set(false);
-            fail(candidate, rejected);
-        }
-    }
-
-    private void copyAvailable(Candidate candidate) {
-        StabilityDetector.Snapshot afterCopy = null;
-        boolean copied = false;
-        try {
-            StabilityDetector.Snapshot beforeCopy = stabilityDetector.sample(candidate.source);
-            long copiedSoFar = candidate.copiedBytes;
-            requireNoShrink(candidate.source, beforeCopy.size(), copiedSoFar);
-
-            long copiedBytes = fileMover.appendRange(
-                    candidate.source, candidate.staging, copiedSoFar, beforeCopy.size());
-            candidate.copiedBytes = copiedBytes;
-            afterCopy = stabilityDetector.sample(candidate.source);
-            candidate.markQuietFrom(afterCopy);
-            copied = true;
-            logger.info("Staged file={} copiedBytes={} appendedBytes={}",
-                    candidate.fileName, copiedBytes, copiedBytes - copiedSoFar);
-        } catch (Exception failure) {
-            fail(candidate, failure);
-        } finally {
-            candidate.workScheduled.set(false);
-        }
-
-        if (!copied || !running.get() || !candidates.containsKey(candidate.source)) return;
-        if (afterCopy.size() > candidate.copiedBytes) {
-            submit(candidate, this::copyAvailable);
-        } else {
-            scheduleCheck(candidate, config.pollIntervalMillis());
-        }
-    }
-
-    private void scheduleCheck(Candidate candidate, long delayMillis) {
-        if (!running.get() || !candidate.checkScheduled.compareAndSet(false, true)) return;
-        try {
-            scheduler.schedule(() -> checkStability(candidate), delayMillis, TimeUnit.MILLISECONDS);
-        } catch (RejectedExecutionException ignored) {
-            candidate.checkScheduled.set(false);
-        }
-    }
-
-    private void checkStability(Candidate candidate) {
-        candidate.checkScheduled.set(false);
-        if (!running.get() || !candidates.containsKey(candidate.source)) return;
-        if (candidate.workScheduled.get()) {
-            scheduleCheck(candidate, config.pollIntervalMillis());
+            logger.error("Could not start archiving file={}", source, failure);
             return;
         }
+
+        candidates.put(source, candidate);
+        logger.info("Detected file={} detectedBy={}", fileName, reason);
+        advance(candidate);
+    }
+
+    /**
+     * The one decision point: look at the source and choose this candidate's next action.
+     * Every path either dispatches exactly one worker pass, schedules exactly one poll, or
+     * finishes the candidate.
+     */
+    private void advance(Candidate candidate) {
+        if (!running || !candidates.containsKey(candidate.source)) return;
         try {
             StabilityDetector.Snapshot current = stabilityDetector.sample(candidate.source);
             requireNoShrink(candidate.source, current.size(), candidate.copiedBytes);
+
             if (current.size() > candidate.copiedBytes) {
-                submit(candidate, this::copyAvailable);
+                startCopy(candidate, current.size());
                 return;
             }
-
             if (!stabilityDetector.unchanged(candidate.stagedSnapshot, current)) {
                 candidate.markQuietFrom(current);
             }
             if (stabilityDetector.quietFor(candidate.quietSinceNanos, System.nanoTime())) {
-                submit(candidate, this::publish);
+                startPublication(candidate);
             } else {
-                scheduleCheck(candidate, config.pollIntervalMillis());
+                schedulePoll(candidate);
             }
         } catch (Exception failure) {
             fail(candidate, failure);
         }
     }
 
-    private void publish(Candidate candidate) {
-        boolean published = false;
-        boolean retry = false;
+    private void startCopy(Candidate candidate, long upTo) {
+        long from = candidate.copiedBytes;
+        offload(candidate,
+                () -> fileMover.appendRange(candidate.source, candidate.staging, from, upTo),
+                copied -> copyFinished(candidate, from, copied));
+    }
+
+    private void copyFinished(Candidate candidate, long from, long copied) {
+        candidate.copiedBytes = copied;
+        logger.info("Staged file={} copiedBytes={} appendedBytes={}",
+                candidate.fileName, copied, copied - from);
+        advance(candidate);
+    }
+
+    private void startPublication(Candidate candidate) {
         long started = System.nanoTime();
+        offload(candidate,
+                () -> publishToArchive(candidate),
+                outcome -> publicationFinished(candidate, outcome, started));
+    }
+
+    private void publicationFinished(Candidate candidate, Publication outcome, long startedNanos) {
+        if (outcome == Publication.RETRY) {
+            logger.debug("Source changed while publishing file={}; waiting for quiet again",
+                    candidate.fileName);
+            advance(candidate);
+            return;
+        }
         try {
-            StabilityDetector.Snapshot beforePublish = stabilityDetector.sample(candidate.source);
-            if (beforePublish.size() != candidate.copiedBytes
-                    || !stabilityDetector.unchanged(candidate.stagedSnapshot, beforePublish)) {
-                candidate.markQuietFrom(beforePublish);
-                retry = true;
-                return;
-            }
+            repository.markArchived(candidate.fileName, candidate.destination.getParent(), Instant.now());
+        } catch (RuntimeException databaseFailure) {
+            logger.error("Published file but could not mark it ARCHIVED; startup recovery will reconcile file={}",
+                    candidate.fileName, databaseFailure);
+        }
+        logger.info("Archived file={} destination={} bytes={} durationMs={}",
+                candidate.fileName, candidate.destination, candidate.copiedBytes,
+                (System.nanoTime() - startedNanos) / 1_000_000);
+        candidates.remove(candidate.source);
+    }
 
-            fileMover.publish(candidate.staging, candidate.destination);
-            published = true;
-            StabilityDetector.Snapshot afterPublish = stabilityDetector.sample(candidate.source);
-            if (!stabilityDetector.unchanged(beforePublish, afterPublish)) {
-                fileMover.rollbackPublication(candidate.destination, candidate.staging);
-                published = false;
-                candidate.markQuietFrom(afterPublish);
-                retry = true;
-                return;
-            }
-
-            Files.delete(candidate.source);
-            try {
-                repository.markArchived(candidate.fileName, candidate.destination.getParent(), Instant.now());
-            } catch (RuntimeException databaseFailure) {
-                logger.error("Published file but could not mark it ARCHIVED; startup recovery will reconcile file={}",
-                        candidate.fileName, databaseFailure);
-            }
-            logger.info("Archived file={} destination={} bytes={} durationMs={}",
-                    candidate.fileName, candidate.destination, candidate.copiedBytes,
-                    (System.nanoTime() - started) / 1_000_000);
-            discard(candidate);
-        } catch (Exception failure) {
-            if (published && Files.exists(candidate.destination) && !Files.exists(candidate.staging)) {
-                try {
-                    fileMover.rollbackPublication(candidate.destination, candidate.staging);
-                } catch (IOException rollbackFailure) {
-                    failure.addSuppressed(rollbackFailure);
-                }
-            }
-            fail(candidate, failure);
-        } finally {
-            candidate.workScheduled.set(false);
-            if (retry && running.get() && candidates.containsKey(candidate.source)) {
-                if (candidate.stagedSnapshot.size() > candidate.copiedBytes) {
-                    submit(candidate, this::copyAvailable);
-                } else {
-                    scheduleCheck(candidate, config.pollIntervalMillis());
-                }
-            }
+    private void schedulePoll(Candidate candidate) {
+        try {
+            scheduler.schedule(() -> advance(candidate),
+                    config.pollIntervalMillis(), TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ignored) {
+            // Shutting down.
         }
     }
 
     private void fail(Candidate candidate, Exception failure) {
-        if (!candidates.containsKey(candidate.source)) return;
+        if (candidates.remove(candidate.source) == null) return;
         markFailed(candidate.fileName, failure);
-        logger.error("Incremental archive operation failed for file={} staging={}",
+        logger.error("Archive operation failed for file={} staging={}",
                 candidate.source, candidate.staging, failure);
-        discard(candidate);
     }
 
     private void markFailed(String fileName, Exception failure) {
@@ -280,9 +232,67 @@ final class SourceWatcher implements AutoCloseable {
         }
     }
 
-    private void discard(Candidate candidate) {
-        candidates.remove(candidate.source, candidate);
-        inFlight.remove(candidate.source);
+    // ---------------------------------------------------------------- worker threads
+
+    /**
+     * Runs blocking I/O on a worker and applies its result back on the scheduler thread.
+     * The task may read candidate fields written before dispatch, but must not write any.
+     */
+    private <T> void offload(Candidate candidate, Callable<T> work, Consumer<T> onSuccess) {
+        try {
+            workers.execute(() -> {
+                try {
+                    T result = work.call();
+                    onSchedulerThread(() -> onSuccess.accept(result));
+                } catch (Exception failure) {
+                    onSchedulerThread(() -> fail(candidate, failure));
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            fail(candidate, rejected);
+        }
+    }
+
+    /** Publishes staging, or reports that the source moved and the quiet period must restart. */
+    private Publication publishToArchive(Candidate candidate) throws IOException {
+        StabilityDetector.Snapshot before = stabilityDetector.sample(candidate.source);
+        if (before.size() != candidate.copiedBytes
+                || !stabilityDetector.unchanged(candidate.stagedSnapshot, before)) {
+            return Publication.RETRY;
+        }
+
+        fileMover.publish(candidate.staging, candidate.destination);
+        try {
+            StabilityDetector.Snapshot after = stabilityDetector.sample(candidate.source);
+            if (!stabilityDetector.unchanged(before, after)) {
+                fileMover.rollbackPublication(candidate.destination, candidate.staging);
+                return Publication.RETRY;
+            }
+            Files.delete(candidate.source);
+            return Publication.DONE;
+        } catch (IOException failure) {
+            if (Files.exists(candidate.destination) && !Files.exists(candidate.staging)) {
+                try {
+                    fileMover.rollbackPublication(candidate.destination, candidate.staging);
+                } catch (IOException rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    // ----------------------------------------------------------------
+
+    private void onSchedulerThread(Runnable action) {
+        if (!running) return;
+        try {
+            scheduler.execute(() -> {
+                if (running) action.run();
+            });
+        } catch (RejectedExecutionException ignored) {
+            // Shutting down.
+        }
     }
 
     private static void requireNoShrink(Path source, long sourceSize, long copiedBytes) throws IOException {
@@ -292,17 +302,17 @@ final class SourceWatcher implements AutoCloseable {
         }
     }
 
+    private enum Publication { DONE, RETRY }
+
+    /** Owned by the scheduler thread; plain fields are deliberate. See the class javadoc. */
     private static final class Candidate {
         private final Path source;
         private final String fileName;
         private final Path destination;
         private final Path staging;
-        private final AtomicBoolean workScheduled = new AtomicBoolean();
-        private final AtomicBoolean checkScheduled = new AtomicBoolean();
-        /** In-memory only: staging is discarded on restart, so this never outlives the run. */
-        private volatile long copiedBytes;
-        private volatile StabilityDetector.Snapshot stagedSnapshot;
-        private volatile long quietSinceNanos;
+        private long copiedBytes;
+        private StabilityDetector.Snapshot stagedSnapshot;
+        private long quietSinceNanos;
 
         private Candidate(Path source, String fileName, Path destination, Path staging) {
             this.source = source;
