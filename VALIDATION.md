@@ -47,7 +47,7 @@ once at a fixed moment.
 `mvn verify` on Linux, Java 21, run 2026-09-24:
 
 ```
-Tests run: 33, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 35, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 16, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -61,7 +61,7 @@ BUILD SUCCESS
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
-| `SourceDetectorTest` | 5 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close |
+| `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, first sightings vs repeat listings |
 | `ArchiveRepositoryIT` | 7 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
 | `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |
@@ -235,5 +235,3 @@ threads in log:  1000 x [reconciliation-1], 7 x [main]
   changes.
 - Remote storage (NFS, CIFS) is untested. Periodic reconciliation limits the risk
   of missed `WatchService` events, but it needs separate operational testing.
-- A malformed entry left in the source directory is re-reported by every
-  reconciliation sweep, so the log repeats that warning until the file is removed.

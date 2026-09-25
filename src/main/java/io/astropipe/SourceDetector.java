@@ -21,6 +21,9 @@ import java.util.function.BiConsumer;
  * how it was found, to a sink. It does not interpret names: deciding what is a
  * satellite image is the pipeline's job.
  *
+ * <p>Each report carries a {@link Detection} saying how the file was found, which lets
+ * the pipeline tell a first sighting apart from a re-scan of everything.
+ *
  * <p>{@code WatchService} supplies low-latency {@code ENTRY_CREATE} and
  * {@code ENTRY_MODIFY} events. It cannot recover events missed while the process was
  * stopped and may overflow, so a startup listing and a periodic listing run alongside
@@ -33,7 +36,7 @@ final class SourceDetector implements AutoCloseable {
     private final Path sourceDirectory;
     private final ScheduledExecutorService scheduler;
     private final int listingIntervalSeconds;
-    private final BiConsumer<Path, String> onDetected;
+    private final BiConsumer<Path, Detection> onDetected;
     private final CountDownLatch stopped = new CountDownLatch(1);
 
     private volatile boolean running;
@@ -48,7 +51,7 @@ final class SourceDetector implements AutoCloseable {
             Path sourceDirectory,
             ScheduledExecutorService scheduler,
             int listingIntervalSeconds,
-            BiConsumer<Path, String> onDetected) {
+            BiConsumer<Path, Detection> onDetected) {
         this.sourceDirectory = sourceDirectory;
         this.scheduler = scheduler;
         this.listingIntervalSeconds = listingIntervalSeconds;
@@ -60,9 +63,9 @@ final class SourceDetector implements AutoCloseable {
         boolean watchServiceActive = initializeWatchService();
         running = true;
 
-        sweep("startup");
+        sweep(Detection.STARTUP_LISTING);
         scheduler.scheduleAtFixedRate(
-                () -> sweep("periodic reconciliation"),
+                () -> sweep(Detection.PERIODIC_LISTING),
                 listingIntervalSeconds,
                 listingIntervalSeconds,
                 TimeUnit.SECONDS);
@@ -125,11 +128,13 @@ final class SourceDetector implements AutoCloseable {
                 for (WatchEvent<?> event : key.pollEvents()) {
                     if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
                         logger.warn("WatchService overflow detected; scheduling an immediate listing");
-                        scheduler.execute(() -> sweep("overflow reconciliation"));
+                        scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING));
                         continue;
                     }
                     Path context = (Path) event.context();
-                    report(sourceDirectory.resolve(context), "watch " + event.kind().name());
+                    report(sourceDirectory.resolve(context),
+                            event.kind() == StandardWatchEventKinds.ENTRY_CREATE
+                                    ? Detection.FILE_CREATED : Detection.FILE_MODIFIED);
                 }
                 if (!key.reset()) {
                     logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
@@ -146,16 +151,48 @@ final class SourceDetector implements AutoCloseable {
         }
     }
 
-    private void sweep(String reason) {
+    private void sweep(Detection detection) {
         if (!running) return;
         try (var paths = Files.list(sourceDirectory)) {
-            paths.filter(Files::isRegularFile).forEach(path -> report(path, reason));
+            paths.filter(Files::isRegularFile).forEach(path -> report(path, detection));
         } catch (IOException e) {
-            logger.error("Could not perform {} of source directory={}", reason, sourceDirectory, e);
+            logger.error("Could not perform {} of source directory={}", detection, sourceDirectory, e);
         }
     }
 
-    private void report(Path path, String reason) {
-        onDetected.accept(path.toAbsolutePath().normalize(), reason);
+    private void report(Path path, Detection detection) {
+        onDetected.accept(path.toAbsolutePath().normalize(), detection);
+    }
+
+    /**
+     * How a file came to be reported.
+     *
+     * <p>{@link #firstSighting()} separates the two that can plausibly be the first time
+     * this run has seen a given file from the listings that re-report everything already
+     * there. Only the former deserve to be noisy about a file the pipeline will reject.
+     */
+    enum Detection {
+        STARTUP_LISTING("startup listing", true),
+        FILE_CREATED("watch ENTRY_CREATE", true),
+        FILE_MODIFIED("watch ENTRY_MODIFY", true),
+        PERIODIC_LISTING("periodic listing", false),
+        OVERFLOW_LISTING("overflow listing", false);
+
+        private final String label;
+        private final boolean firstSighting;
+
+        Detection(String label, boolean firstSighting) {
+            this.label = label;
+            this.firstSighting = firstSighting;
+        }
+
+        boolean firstSighting() {
+            return firstSighting;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
     }
 }

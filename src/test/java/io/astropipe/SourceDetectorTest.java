@@ -6,13 +6,16 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Detection is independent of the archive, so none of this needs a database. */
@@ -21,6 +24,7 @@ class SourceDetectorTest {
     Path temporaryDirectory;
 
     private final Set<Path> detected = ConcurrentHashMap.newKeySet();
+    private final List<SourceDetector.Detection> detections = new CopyOnWriteArrayList<>();
     private ScheduledExecutorService scheduler;
     private SourceDetector detector;
 
@@ -77,9 +81,36 @@ class SourceDetectorTest {
         assertEquals(Set.of(), detected);
     }
 
+    @Test
+    void reportsTheStartupListingAsSomethingWorthSayingOnce() throws Exception {
+        Files.writeString(temporaryDirectory.resolve("SAT_IMG_20210714102730046.raw"), "x");
+
+        start();
+
+        assertEquals(List.of(SourceDetector.Detection.STARTUP_LISTING), detections);
+        assertTrue(SourceDetector.Detection.STARTUP_LISTING.firstSighting());
+    }
+
+    @Test
+    void reportsRepeatListingsAsNothingNew() throws Exception {
+        // A file the pipeline will refuse stays put, so every later listing finds it again.
+        Files.writeString(temporaryDirectory.resolve("not-an-image.txt"), "x");
+
+        start();
+
+        Await.until("a periodic listing re-reports the file",
+                () -> detections.contains(SourceDetector.Detection.PERIODIC_LISTING));
+        assertFalse(SourceDetector.Detection.PERIODIC_LISTING.firstSighting(),
+                "a re-scan is not news; treating it as such warns on every sweep, forever");
+        assertFalse(SourceDetector.Detection.OVERFLOW_LISTING.firstSighting());
+    }
+
     private void start() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
-        detector = new SourceDetector(temporaryDirectory, scheduler, 1, (path, reason) -> detected.add(path));
+        detector = new SourceDetector(temporaryDirectory, scheduler, 1, (path, detection) -> {
+            detected.add(path);
+            detections.add(detection);
+        });
         detector.start();
     }
 

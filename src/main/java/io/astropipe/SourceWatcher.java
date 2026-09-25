@@ -2,6 +2,7 @@ package io.astropipe;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -90,14 +91,14 @@ final class SourceWatcher implements AutoCloseable {
     }
 
     /** Detector callback, on any thread: hand the file to its owner. */
-    private void onDetected(Path source, String reason) {
-        onSchedulerThread(() -> admit(source, reason));
+    private void onDetected(Path source, SourceDetector.Detection detection) {
+        onSchedulerThread(() -> admit(source, detection));
     }
 
     // ---------------------------------------------------------------- scheduler thread only
 
     /** Claims a newly seen file and starts tracking it. */
-    private void admit(Path source, String reason) {
+    private void admit(Path source, SourceDetector.Detection detection) {
         if (candidates.containsKey(source)) return;
         String fileName = source.getFileName().toString();
 
@@ -105,8 +106,13 @@ final class SourceWatcher implements AutoCloseable {
         try {
             timestamp = SatelliteImageName.parse(fileName);
         } catch (SatelliteImageName.InvalidNameException invalid) {
-            logger.warn("Ignoring malformed source entry={} detectedBy={} reason={}",
-                    source, reason, invalid.getMessage());
+            // A name that cannot be parsed is never claimed, so every later listing meets
+            // it as though it were new. Say so once, when this could be the first sighting,
+            // and stay quiet on the re-scans: otherwise one stray file in the source
+            // directory warns on every sweep for the life of the process.
+            logger.atLevel(detection.firstSighting() ? Level.WARN : Level.DEBUG)
+                    .log("Ignoring malformed source entry={} detectedBy={} reason={}",
+                            source, detection, invalid.getMessage());
             return;
         }
 
@@ -118,7 +124,7 @@ final class SourceWatcher implements AutoCloseable {
             return;
         }
         if (status.terminal()) {
-            logger.debug("Ignoring terminal file={} status={} detectedBy={}", fileName, status, reason);
+            logger.debug("Ignoring terminal file={} status={} detectedBy={}", fileName, status, detection);
             return;
         }
 
@@ -136,7 +142,7 @@ final class SourceWatcher implements AutoCloseable {
         }
 
         candidates.put(source, candidate);
-        logger.info("Detected file={} detectedBy={}", fileName, reason);
+        logger.info("Detected file={} detectedBy={}", fileName, detection);
         advance(candidate);
     }
 

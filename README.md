@@ -66,6 +66,13 @@ setting, or an inaccessible directory.
 Logs go to the console and to `logs/astropipe.log`, rotated daily and kept for
 14 days.
 
+An entry the pipeline refuses — a name that is not `SAT_IMG_<timestamp>.raw`, or
+one whose 17 digits are not a real instant — is left where it is and never
+claimed, so every later listing finds it again. It is reported at `WARN` when it
+could be a first sighting, meaning a watch event or the startup listing, and at
+`DEBUG` on the periodic re-scans. An operator therefore hears about a stray file
+once per run rather than once per sweep for as long as the process lives.
+
 ## Input data
 
 Test images come from a separate generator application, which has its own build
@@ -85,7 +92,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 33 functional tests, no database connection
+mvn test     # 35 functional tests, no database connection
 mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
 ```
 
