@@ -47,14 +47,14 @@ once at a fixed moment.
 `mvn verify` on Linux, Java 21, run 2026-09-24:
 
 ```
-Tests run: 38, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 36, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 16, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
 
 | Suite | Tests | Covers |
 | --- | ---: | --- |
-| `ConfigTest` | 9 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
+| `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
 | `SatelliteImageNameTest` | 10 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
 | `ArchivePathResolverTest` | 2 | Zero-padded hierarchy, creation, year boundary |
 | `FileMoverTest` | 4 | Ranged append, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
@@ -64,7 +64,7 @@ BUILD SUCCESS
 | `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, first sightings vs repeat listings |
 | `ArchiveRepositoryIT` | 7 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
-| `ArchiverIT` | 6 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |
+| `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |
 
 ## Manual end-to-end test cases
 

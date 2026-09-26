@@ -32,7 +32,7 @@ class ArchiveReconcilerIT {
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        reconciler = new ArchiveReconciler(source, resolver, fileMover, repository, true);
+        reconciler = new ArchiveReconciler(source, resolver, fileMover, repository);
     }
 
     @AfterEach

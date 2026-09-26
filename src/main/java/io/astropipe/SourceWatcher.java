@@ -273,7 +273,7 @@ final class SourceWatcher implements AutoCloseable {
                 fileMover.rollbackPublication(candidate.destination, candidate.staging);
                 return Publication.RETRY;
             }
-            if (config.deletesArchivedSource()) Files.delete(candidate.source);
+            Files.delete(candidate.source);
             return Publication.DONE;
         } catch (IOException failure) {
             if (Files.exists(candidate.destination) && !Files.exists(candidate.staging)) {
