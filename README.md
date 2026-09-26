@@ -100,7 +100,7 @@ See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
 
 ## The code
 
-Eleven classes in one package. They are kept package-private wherever possible —
+Twelve classes in one package. They are kept package-private wherever possible —
 only `Main` and `Config` are public — so the compiler enforces that nothing here
 is reachable from outside. That is worth more at this size than a directory per
 layer would be, but it does mean an alphabetical file listing scatters related
@@ -109,6 +109,7 @@ things, so here is the map:
 | Role | Class |
 | --- | --- |
 | Entry point and wiring | `Main` |
+| The running pipeline and its teardown | `Pipeline` |
 | Configuration | `Config` |
 | Noticing files | `SourceDetector` |
 | Deciding what happens to one | `SourceWatcher` |

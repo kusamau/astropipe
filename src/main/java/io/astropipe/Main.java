@@ -6,10 +6,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -73,51 +69,29 @@ public final class Main {
                 result.archived(), result.resumable(), result.failed());
     }
 
-    /**
-     * Runs the pipeline until a shutdown signal arrives, then drains it.
-     *
-     * <p>The three are closed in reverse order of declaration, which is the order teardown
-     * needs: the watcher stops accepting work, the scheduler stops polling, and the workers
-     * finish what they hold — all before {@link #run} closes the database under them.
-     */
+    /** Runs the pipeline until a shutdown signal arrives, then drains it. */
     private static void archiveUntilStopped(
             Config config,
             Path sourceDirectory,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        try (ThreadPoolExecutor workers = newWorkerPool(config);
-             ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-                     Thread.ofPlatform().name("reconciliation-", 1).factory());
-             SourceWatcher watcher = new SourceWatcher(
-                     sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler)) {
-            watcher.start();
-            // Only now can close() do anything: before start() it short-circuits, so a
-            // signal arriving here would have left a running watcher no hook could stop.
-            stopOnShutdownSignal(watcher);
+        try (Pipeline pipeline = Pipeline.start(config, sourceDirectory, pathResolver, fileMover, repository)) {
+            // Only now can stopping do anything: before the watcher starts it short-circuits,
+            // so a signal arriving earlier would have left a pipeline no hook could stop.
+            stopOnShutdownSignal(pipeline);
             logger.info("Monitoring source directory={}", sourceDirectory);
-            watcher.awaitTermination();
+            pipeline.awaitStop();
             logger.info("Shutdown started");
         }
         logger.info("Shutdown complete");
     }
 
-    private static ThreadPoolExecutor newWorkerPool(Config config) {
-        return new ThreadPoolExecutor(
-                config.workerPoolSize(),
-                config.workerPoolSize(),
-                0L,
-                TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(config.workerQueueCapacity()),
-                Thread.ofPlatform().name("archive-worker-", 1).factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy());
-    }
-
     /** Unblocks the main thread on Ctrl-C or SIGTERM, then waits for it to drain. */
-    private static void stopOnShutdownSignal(SourceWatcher watcher) {
+    private static void stopOnShutdownSignal(Pipeline pipeline) {
         Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            watcher.close();
+            pipeline.requestStop();
             try {
                 mainThread.join(TimeUnit.SECONDS.toMillis(30));
             } catch (InterruptedException e) {
