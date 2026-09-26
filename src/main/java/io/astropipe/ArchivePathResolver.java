@@ -7,7 +7,10 @@ import java.time.LocalDate;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Maps an image timestamp onto {@code <archive>/<Year>/<Month>/<Day>}, creating it on first use. */
+/**
+ * Responsible to create the requested directory structure for each archived file.
+ * Maps an image timestamp onto {@code <archive>/<Year>/<Month>/<Day>}, creating it on first use.
+ **/
 final class ArchivePathResolver {
     private final Path archiveRoot;
     private final Set<Path> preparedDirectories = ConcurrentHashMap.newKeySet();

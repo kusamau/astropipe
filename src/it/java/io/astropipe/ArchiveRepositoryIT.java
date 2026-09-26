@@ -107,26 +107,6 @@ class ArchiveRepositoryIT {
         assertEquals(1, database.pragma("synchronous"));
     }
 
-    @Test
-    void rejectsTheLegacySchemaWithoutMutatingIt() throws Exception {
-        Database legacyDatabase = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("legacy.db"));
-        legacyDatabase.execute("""
-                CREATE TABLE archived_file (
-                    file_name TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    copied_bytes INTEGER NOT NULL DEFAULT 0,
-                    archive_dir TEXT,
-                    saved_at TEXT,
-                    first_seen_at TEXT NOT NULL
-                )
-                """);
-        Database.DatabaseException failure = assertThrows(Database.DatabaseException.class,
-                () -> new ArchiveRepository(legacyDatabase).initialize());
-        legacyDatabase.close();
-
-        assertTrue(failure.getMessage().contains("create a fresh database"));
-    }
-
     private String column(String name, String fileName) {
         return database.queryOne(
                 "SELECT " + name + " FROM archived_file WHERE file_name = ?", r -> r.getString(1), fileName);

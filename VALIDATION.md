@@ -44,11 +44,11 @@ once at a fixed moment.
 
 ## Automated results
 
-`mvn verify` on Linux, Java 21, run 2026-09-24:
+`mvn verify` on Linux, Java 21, run 2026-09-26:
 
 ```
 Tests run: 36, Failures: 0, Errors: 0, Skipped: 0   (surefire)
-Tests run: 16, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
+Tests run: 15, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
 
@@ -62,7 +62,7 @@ BUILD SUCCESS
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
 | `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, first sightings vs repeat listings |
-| `ArchiveRepositoryIT` | 7 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous`, legacy schema rejection |
+| `ArchiveRepositoryIT` | 6 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous` |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
 | `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |
 

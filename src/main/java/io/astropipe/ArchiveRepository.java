@@ -17,25 +17,13 @@ import java.util.List;
  * write.
  */
 final class ArchiveRepository {
-    private static final int SCHEMA_VERSION = 3;
-
     private final Database database;
 
     ArchiveRepository(Database database) {
         this.database = database;
     }
 
-    /** Compound: the version check and the schema creation must not interleave. */
-    synchronized void initialize() {
-        boolean tableExists = database.queryOne(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='archived_file')",
-                row -> row.getBoolean(1));
-        int version = database.pragma("user_version");
-        if (tableExists && version != SCHEMA_VERSION) {
-            throw new Database.DatabaseException("Archive database schema version " + version
-                    + " is incompatible with required version " + SCHEMA_VERSION
-                    + "; create a fresh database");
-        }
+    void initialize() {
         database.execute("""
                 CREATE TABLE IF NOT EXISTS archived_file (
                     file_name     TEXT PRIMARY KEY,
@@ -52,7 +40,6 @@ final class ArchiveRepository {
                 CREATE INDEX IF NOT EXISTS idx_archived_file_in_progress
                 ON archived_file(file_name) WHERE status = 'IN_PROGRESS'
                 """);
-        if (!tableExists) database.execute("PRAGMA user_version = " + SCHEMA_VERSION);
     }
 
     /**

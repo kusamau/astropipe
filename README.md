@@ -93,7 +93,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 
 ```bash
 mvn test     # 36 functional tests, no database connection
-mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
+mvn verify   # adds 15 SQLite-backed integration tests under src/it/java
 ```
 
 See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
@@ -180,9 +180,6 @@ a published destination shorter than its source is deleted too rather than leave
 a truncated image under a complete name. The row stays in progress and the image
 is copied again. Only a fully published destination, a source that shrank, or the
 loss of both copies is terminal.
-
-Schema version 3 is required. A database created by an earlier state model is
-rejected with an explicit request to create a fresh database.
 
 The only index is partial and covering: it holds in-progress rows alone, which are
 transient, so the startup lookup stays instant however large the archive grows.

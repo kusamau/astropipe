@@ -12,13 +12,21 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-/** Entry point: load the JSON config, wire the pipeline, and run until interrupted. */
+/**
+ * Simulates an archiving procedure following satellite's downlinks.
+ * Covers only archiving operations.
+ *
+
+ * */
 public final class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
     private static final String DEFAULT_CONFIG_FILE = "config.json";
 
     private Main() { }
 
+    /**
+     * Loads the configuration file then runs until interrupted.
+     */
     public static void main(String[] args) {
         Path configFile = Path.of(args.length > 0 ? args[0] : DEFAULT_CONFIG_FILE);
         try {
@@ -32,11 +40,17 @@ public final class Main {
     }
 
     private static void run(Config config) throws IOException, InterruptedException {
+        // Source directory Path
         Path sourceDirectory = directory(config.sourceDir(), "sourceDir", false);
-        Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
-        logStorageLayout(sourceDirectory, archiveDirectory);
+        logger.info("Source directory={} store={}", sourceDirectory, Files.getFileStore(sourceDirectory));
 
+        // Archive directory Path
+        Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
+        logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
+
+        // Responsible to create the required Path for each file to be archived
         ArchivePathResolver pathResolver = new ArchivePathResolver(archiveDirectory);
+
         FileMover fileMover = new FileMover();
 
         try (Database database = new Database(config.databaseUrl())) {
@@ -45,12 +59,6 @@ public final class Main {
             recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository);
             archiveUntilStopped(config, sourceDirectory, pathResolver, fileMover, repository);
         }
-    }
-
-    /** Whether source and archive share a device decides how much copying really costs. */
-    private static void logStorageLayout(Path sourceDirectory, Path archiveDirectory) throws IOException {
-        logger.info("Source directory={} store={}", sourceDirectory, Files.getFileStore(sourceDirectory));
-        logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
     }
 
     /** Resolves whatever the last run left mid-flight before new work is accepted. */
