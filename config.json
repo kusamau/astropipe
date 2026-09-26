@@ -3,6 +3,8 @@
   "archiveDir": "./data/archive",
   "databaseUrl": "jdbc:sqlite:./data/archive.db",
 
+  "sourceAfterArchive": "delete",
+
   "pollIntervalMillis": 250,
   "quietPeriodMillis": 250,
   "reconciliationIntervalSeconds": 30,

@@ -23,16 +23,19 @@ final class ArchiveReconciler {
     private final ArchivePathResolver pathResolver;
     private final FileMover fileMover;
     private final ArchiveRepository repository;
+    private final boolean deleteArchivedSource;
 
     ArchiveReconciler(
             Path sourceDirectory,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
-            ArchiveRepository repository) {
+            ArchiveRepository repository,
+            boolean deleteArchivedSource) {
         this.sourceDirectory = sourceDirectory;
         this.pathResolver = pathResolver;
         this.fileMover = fileMover;
         this.repository = repository;
+        this.deleteArchivedSource = deleteArchivedSource;
     }
 
     Result reconcile() throws IOException {
@@ -73,9 +76,9 @@ final class ArchiveReconciler {
             long sourceSize = Files.size(source);
             long destinationSize = Files.size(destination);
             if (sourceSize == destinationSize) {
-                Files.delete(source);
+                if (deleteArchivedSource) Files.delete(source);
                 repository.markArchived(fileName, destination.getParent(), Instant.now());
-                logger.info("Reconciled published file and removed source: {}", fileName);
+                logger.info("Reconciled published file: {}", fileName);
                 return Outcome.ARCHIVED;
             }
             if (destinationSize > sourceSize) {

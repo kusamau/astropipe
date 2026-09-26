@@ -35,6 +35,10 @@ public final class Main {
         Path sourceDirectory = directory(config.sourceDir(), "sourceDir", false);
         Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
         logStorageLayout(sourceDirectory, archiveDirectory);
+        if (!config.deletesArchivedSource()) {
+            logger.warn("sourceAfterArchive=keep: archived images stay in the source directory, "
+                    + "which will grow and be re-listed on every sweep");
+        }
 
         ArchivePathResolver pathResolver = new ArchivePathResolver(archiveDirectory);
         FileMover fileMover = new FileMover();
@@ -42,7 +46,8 @@ public final class Main {
         try (Database database = new Database(config.databaseUrl())) {
             ArchiveRepository repository = new ArchiveRepository(database);
             repository.initialize();
-            recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository);
+            recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository,
+                    config.deletesArchivedSource());
             archiveUntilStopped(config, sourceDirectory, pathResolver, fileMover, repository);
         }
     }
@@ -58,9 +63,10 @@ public final class Main {
             Path sourceDirectory,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
-            ArchiveRepository repository) throws IOException {
-        ArchiveReconciler.Result result =
-                new ArchiveReconciler(sourceDirectory, pathResolver, fileMover, repository).reconcile();
+            ArchiveRepository repository,
+            boolean deleteArchivedSource) throws IOException {
+        ArchiveReconciler.Result result = new ArchiveReconciler(
+                sourceDirectory, pathResolver, fileMover, repository, deleteArchivedSource).reconcile();
         logger.info("Startup reconciliation: archived={} resumable={} failed={}",
                 result.archived(), result.resumable(), result.failed());
     }

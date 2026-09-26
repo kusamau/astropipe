@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -45,7 +46,32 @@ class ConfigTest {
                 """);
 
         assertEquals(4, config.workerPoolSize());
-        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0, 0).workerPoolSize());
+        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0, 0, null).workerPoolSize());
+    }
+
+    @Test
+    void keepsTheSourceOnlyWhenAskedTo() throws Exception {
+        // "move" is what the requirement asks for, so removing the source is the default.
+        assertEquals(Config.SourceAfterArchive.DELETE,
+                load("""
+                        {"sourceDir": "source", "archiveDir": "archive"}
+                        """).sourceAfterArchive());
+        assertTrue(load("""
+                {"sourceDir": "source", "archiveDir": "archive"}
+                """).deletesArchivedSource());
+
+        Config keeping = load("""
+                {"sourceDir": "source", "archiveDir": "archive", "sourceAfterArchive": "keep"}
+                """);
+        assertEquals(Config.SourceAfterArchive.KEEP, keeping.sourceAfterArchive());
+        assertFalse(keeping.deletesArchivedSource());
+    }
+
+    @Test
+    void rejectsAnUnknownRetentionMode() {
+        assertMessageContains("sourceAfterArchive must be \"delete\" or \"keep\", not \"archive\"", """
+                {"sourceDir": "source", "archiveDir": "archive", "sourceAfterArchive": "archive"}
+                """);
     }
 
     @Test

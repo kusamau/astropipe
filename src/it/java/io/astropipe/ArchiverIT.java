@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
@@ -52,7 +53,11 @@ class ArchiverIT {
 
     /** The pipeline settings the watcher reads, tuned down so tests stay fast. */
     private static Config config(int pollMillis, int quietMillis) {
-        return new Config("source", "archive", null, pollMillis, quietMillis, 1, 2, 100);
+        return config(pollMillis, quietMillis, Config.SourceAfterArchive.DELETE);
+    }
+
+    private static Config config(int pollMillis, int quietMillis, Config.SourceAfterArchive after) {
+        return new Config("source", "archive", null, pollMillis, quietMillis, 1, 2, 100, after);
     }
 
     @Test
@@ -116,6 +121,29 @@ class ArchiverIT {
         assertEquals((long) chunks * CHUNK_SIZE, Files.size(destination));
         assertFalse(Files.exists(source), "the source is removed once its image is published");
         assertFalse(Files.exists(staging));
+    }
+
+    @Test
+    void keepsTheSourceWhenConfiguredTo() throws Exception {
+        Fixture fixture = start(config(25, 50, Config.SourceAfterArchive.KEEP), null);
+        String fileName = "SAT_IMG_20240401080000000.raw";
+        Path source = Files.writeString(fixture.source.resolve(fileName), "keep me");
+        Path destination = fixture.archive.resolve("2024/04/01").resolve(fileName);
+
+        Await.until("the image is published", () -> Files.exists(destination));
+
+        assertEquals("keep me", Files.readString(destination));
+        assertTrue(Files.exists(source), "the source must survive under sourceAfterArchive=keep");
+
+        // The ledger, not the absence of the file, is what stops it being archived again:
+        // the retained source is re-listed on every sweep and has to be refused each time.
+        Await.until("at least two further listings have seen the retained file",
+                () -> repository.claim(fileName, Instant.now()) == ArchiveRepository.Status.ARCHIVED);
+        TimeUnit.MILLISECONDS.sleep(300);
+        assertEquals(List.of(), repository.inProgressFileNames());
+        assertEquals("keep me", Files.readString(destination));
+        assertTrue(Files.exists(source));
+        assertFalse(Files.exists(destination.resolveSibling(fileName + ".tmp")));
     }
 
     @Test

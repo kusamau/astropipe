@@ -40,6 +40,8 @@ required; anything else falls back to the default shown here.
   "archiveDir": "./data/archive",
   "databaseUrl": "jdbc:sqlite:./data/archive.db",
 
+  "sourceAfterArchive": "delete",
+
   "pollIntervalMillis": 250,
   "quietPeriodMillis": 250,
   "reconciliationIntervalSeconds": 30,
@@ -54,6 +56,7 @@ required; anything else falls back to the default shown here.
 | `sourceDir` | Watched directory. Must already exist and be readable and writable. |
 | `archiveDir` | Archive root. Created with its parents if missing. |
 | `databaseUrl` | JDBC URL of the SQLite ledger. |
+| `sourceAfterArchive` | `delete` (default) or `keep`. See below. |
 | `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
 | `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
 | `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. |
@@ -72,6 +75,23 @@ claimed, so every later listing finds it again. It is reported at `WARN` when it
 could be a first sighting, meaning a watch event or the startup listing, and at
 `DEBUG` on the periodic re-scans. An operator therefore hears about a stray file
 once per run rather than once per sweep for as long as the process lives.
+
+### Keeping the source
+
+`sourceAfterArchive` decides what happens to an image once it is safely in the
+archive. `delete` is the default, and it is what the requirement to *move* images
+asks for: keep the source and the application is a copier, not a mover.
+
+`keep` leaves the image where it was. It is useful while investigating, and it is
+safe — the ledger, not the absence of the file, is what prevents an image being
+archived twice, so a retained file is re-listed on every sweep and refused every
+time. But it changes the source directory from a queue that drains into one that
+only grows, and each retained file costs a directory entry and a ledger lookup on
+every sweep from then on. The application warns at startup when it is set.
+
+Moving archived images aside into a separate directory would give the same
+retention without the growing queue, and is the shape to reach for if `keep` is
+ever wanted continuously rather than for a single investigation.
 
 ## Input data
 
@@ -92,7 +112,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 36 functional tests, no database connection
+mvn test     # 38 functional tests, no database connection
 mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
 ```
 
