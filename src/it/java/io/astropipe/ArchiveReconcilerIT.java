@@ -95,6 +95,6 @@ class ArchiveReconcilerIT {
     }
 
     private Path destinationOf(String fileName) throws Exception {
-        return resolver.resolve(fileName, SatelliteImageName.parse(fileName));
+        return resolver.resolve(SatelliteImageName.parse(fileName));
     }
 }

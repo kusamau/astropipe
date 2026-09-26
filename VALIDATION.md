@@ -47,7 +47,7 @@ once at a fixed moment.
 `mvn verify` on Linux, Java 21, run 2026-09-24:
 
 ```
-Tests run: 35, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 36, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 16, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -55,7 +55,7 @@ BUILD SUCCESS
 | Suite | Tests | Covers |
 | --- | ---: | --- |
 | `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
-| `SatelliteImageNameTest` | 9 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
+| `SatelliteImageNameTest` | 10 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
 | `ArchivePathResolverTest` | 2 | Zero-padded hierarchy, creation, year boundary |
 | `FileMoverTest` | 4 | Ranged append, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |

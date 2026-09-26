@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,8 +16,8 @@ final class ArchivePathResolver {
         this.archiveRoot = archiveRoot.toAbsolutePath().normalize();
     }
 
-    Path resolve(String fileName, LocalDateTime timestamp) throws IOException {
-        LocalDate date = timestamp.toLocalDate();
+    Path resolve(SatelliteImageName image) throws IOException {
+        LocalDate date = image.timestamp().toLocalDate();
         Path directory = archiveRoot
                 .resolve("%04d".formatted(date.getYear()))
                 .resolve("%02d".formatted(date.getMonthValue()))
@@ -31,6 +30,6 @@ final class ArchivePathResolver {
                 throw new IOException("Could not create archive directory " + directory, e);
             }
         }
-        return directory.resolve(fileName);
+        return directory.resolve(image.fileName());
     }
 }

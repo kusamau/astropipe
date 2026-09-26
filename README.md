@@ -92,7 +92,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 35 functional tests, no database connection
+mvn test     # 36 functional tests, no database connection
 mvn verify   # adds 16 SQLite-backed integration tests under src/it/java
 ```
 
@@ -113,7 +113,7 @@ things, so here is the map:
 | Noticing files | `SourceDetector` |
 | Deciding what happens to one | `SourceWatcher` |
 | Startup recovery | `ArchiveReconciler` |
-| Naming and placement | `SatelliteImageName`, `ArchivePathResolver` |
+| Naming and placement | `SatelliteImageName` (a parsed name), `ArchivePathResolver` |
 | Knowing a file is finished | `StabilityDetector` |
 | Moving bytes | `FileMover` |
 | The archive ledger | `ArchiveRepository` |

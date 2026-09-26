@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -100,11 +99,10 @@ final class SourceWatcher implements AutoCloseable {
     /** Claims a newly seen file and starts tracking it. */
     private void admit(Path source, SourceDetector.Detection detection) {
         if (candidates.containsKey(source)) return;
-        String fileName = source.getFileName().toString();
 
-        LocalDateTime timestamp;
+        SatelliteImageName image;
         try {
-            timestamp = SatelliteImageName.parse(fileName);
+            image = SatelliteImageName.parse(source);
         } catch (SatelliteImageName.InvalidNameException invalid) {
             // A name that cannot be parsed is never claimed, so every later listing meets
             // it as though it were new. Say so once, when this could be the first sighting,
@@ -115,6 +113,7 @@ final class SourceWatcher implements AutoCloseable {
                             source, detection, invalid.getMessage());
             return;
         }
+        String fileName = image.fileName();
 
         ArchiveRepository.Status status;
         try {
@@ -131,7 +130,7 @@ final class SourceWatcher implements AutoCloseable {
         // The ledger row is in progress from here on, so a failure below has to close it out.
         Candidate candidate;
         try {
-            Path destination = pathResolver.resolve(fileName, timestamp);
+            Path destination = pathResolver.resolve(image);
             Path staging = fileMover.stagingPath(destination);
             fileMover.createStaging(staging);
             candidate = new Candidate(source, fileName, destination, staging);

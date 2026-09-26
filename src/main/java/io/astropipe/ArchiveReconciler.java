@@ -53,7 +53,7 @@ final class ArchiveReconciler {
         Path source = sourceDirectory.resolve(fileName);
         Path destination;
         try {
-            destination = pathResolver.resolve(fileName, SatelliteImageName.parse(fileName));
+            destination = pathResolver.resolve(SatelliteImageName.parse(fileName));
         } catch (SatelliteImageName.InvalidNameException | IOException e) {
             logger.warn("In-progress row has an invalid or unresolvable destination: {}", fileName, e);
             return fail(fileName);

@@ -5,7 +5,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,9 +19,7 @@ class ArchivePathResolverTest {
         Files.createDirectory(archive);
         ArchivePathResolver resolver = new ArchivePathResolver(archive);
 
-        Path result = resolver.resolve(
-                "SAT_IMG_20210102030405006.raw",
-                LocalDateTime.of(2021, 1, 2, 3, 4, 5, 6_000_000));
+        Path result = resolver.resolve(SatelliteImageName.parse("SAT_IMG_20210102030405006.raw"));
 
         assertEquals(archive.resolve("2021/01/02/SAT_IMG_20210102030405006.raw").toAbsolutePath(), result);
         assertTrue(Files.isDirectory(archive.resolve("2021/01/02")));
@@ -34,9 +31,9 @@ class ArchivePathResolverTest {
         Files.createDirectory(archive);
         ArchivePathResolver resolver = new ArchivePathResolver(archive);
 
-        assertTrue(resolver.resolve("end.raw", LocalDateTime.of(2021, 12, 31, 23, 59))
+        assertTrue(resolver.resolve(SatelliteImageName.parse("SAT_IMG_20211231235959999.raw"))
                 .toString().contains("2021/12/31"));
-        assertTrue(resolver.resolve("start.raw", LocalDateTime.of(2022, 1, 1, 0, 0))
+        assertTrue(resolver.resolve(SatelliteImageName.parse("SAT_IMG_20220101000000000.raw"))
                 .toString().contains("2022/01/01"));
     }
 }

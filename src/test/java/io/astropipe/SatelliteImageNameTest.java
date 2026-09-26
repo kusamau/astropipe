@@ -13,14 +13,23 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class SatelliteImageNameTest {
     @Test
     void parsesTimestampFromValidFileName() {
-        assertEquals(LocalDateTime.of(2021, 7, 14, 10, 27, 30, 46_000_000),
-                SatelliteImageName.parse(Path.of("SAT_IMG_20210714102730046.raw")));
+        SatelliteImageName image = SatelliteImageName.parse(Path.of("SAT_IMG_20210714102730046.raw"));
+
+        assertEquals("SAT_IMG_20210714102730046.raw", image.fileName());
+        assertEquals(LocalDateTime.of(2021, 7, 14, 10, 27, 30, 46_000_000), image.timestamp());
+    }
+
+    @Test
+    void carriesTheNameAndItsTimestampAsOneValue() {
+        // The pair cannot disagree: parsing is the only way to obtain one.
+        assertEquals(SatelliteImageName.parse("SAT_IMG_20240229120000000.raw"),
+                SatelliteImageName.parse(Path.of("/anywhere/SAT_IMG_20240229120000000.raw")));
     }
 
     @Test
     void acceptsLeapDay() {
         assertEquals(LocalDateTime.of(2024, 2, 29, 12, 0),
-                SatelliteImageName.parse("SAT_IMG_20240229120000000.raw"));
+                SatelliteImageName.parse("SAT_IMG_20240229120000000.raw").timestamp());
     }
 
     @ParameterizedTest
