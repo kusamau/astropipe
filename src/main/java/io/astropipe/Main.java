@@ -76,8 +76,8 @@ public final class Main {
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        Pipeline pipeline = Pipeline.start(config, sourceDirectory, pathResolver, fileMover, repository);
-        try (pipeline) {
+        try (Pipeline pipeline = new Pipeline(config, sourceDirectory, pathResolver, fileMover, repository)) {
+            pipeline.start();
             // Only now can stopping do anything: before the watcher starts it short-circuits,
             // so a signal arriving earlier would have left a pipeline no hook could stop.
             stopOnShutdownSignal(pipeline);
