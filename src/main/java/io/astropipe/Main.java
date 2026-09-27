@@ -69,30 +69,30 @@ public final class Main {
                 result.archived(), result.resumable(), result.failed());
     }
 
-    /** Runs the pipeline until a shutdown signal arrives, then drains it. */
+    /** Archives until a shutdown signal arrives or the watch ends, then stops the transfers. */
     private static void archiveUntilStopped(
             Config config,
             Path sourceDirectory,
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        try (Pipeline pipeline = new Pipeline(config, sourceDirectory, pathResolver, fileMover, repository)) {
-            pipeline.start();
-            // Only now can stopping do anything: before the watcher starts it short-circuits,
-            // so a signal arriving earlier would have left a pipeline no hook could stop.
-            stopOnShutdownSignal(pipeline);
+        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, pathResolver, fileMover, repository)) {
+            watcher.start();
+            // Only once started: stopping a detector that has not started shuts its listing
+            // scheduler, and start() would then fail to schedule the periodic listing.
+            stopOnShutdownSignal(watcher);
             logger.info("Monitoring source directory={}", sourceDirectory);
-            pipeline.awaitStop();
+            watcher.awaitTermination();
             logger.info("Shutdown started");
         }
         logger.info("Shutdown complete");
     }
 
-    /** Unblocks the main thread on Ctrl-C or SIGTERM, then waits for it to drain. */
-    private static void stopOnShutdownSignal(Pipeline pipeline) {
+    /** Unblocks the main thread on Ctrl-C or SIGTERM, then waits for it to finish shutting down. */
+    private static void stopOnShutdownSignal(SourceWatcher watcher) {
         Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            pipeline.requestStop();
+            watcher.requestStop();
             try {
                 mainThread.join(TimeUnit.SECONDS.toMillis(30));
             } catch (InterruptedException e) {

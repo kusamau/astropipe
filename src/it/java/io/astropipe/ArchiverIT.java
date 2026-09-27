@@ -16,19 +16,19 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiverIT {
@@ -38,7 +38,6 @@ class ArchiverIT {
     Path temporaryDirectory;
 
     private SourceWatcher watcher;
-    private ExecutorService transfers;
     private FileSystem sourceFileSystem;
     private ArchiveRepository repository;
     private Database database;
@@ -49,10 +48,6 @@ class ArchiverIT {
         watcherLogger().detachAppender(watcherLog);
         watcherLogger().setLevel(null);
         if (watcher != null) watcher.close();
-        if (transfers != null) {
-            transfers.shutdownNow();
-            transfers.awaitTermination(5, TimeUnit.SECONDS);
-        }
         if (database != null) database.close();
         if (sourceFileSystem != null) sourceFileSystem.close();
     }
@@ -201,8 +196,7 @@ class ArchiverIT {
         Path staging = fixture.archive.resolve("2024/03/05").resolve(fileName + ".tmp");
         Await.until("the source is fully staged", () -> Files.exists(staging) && Files.size(staging) == 8);
 
-        transfers.shutdownNow();
-        assertTrue(transfers.awaitTermination(5, TimeUnit.SECONDS));
+        assertTimeoutPreemptively(Duration.ofSeconds(5), watcher::close);
 
         assertEquals(List.of(fileName), repository.inProgressFileNames(),
                 "a stop is not a failure: startup reconciliation must be able to pick the image up again");
@@ -267,9 +261,7 @@ class ArchiverIT {
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        transfers = Executors.newVirtualThreadPerTaskExecutor();
-        watcher = new SourceWatcher(source, config, new ArchivePathResolver(archive),
-                new FileMover(), repository, transfers);
+        watcher = new SourceWatcher(source, config, new ArchivePathResolver(archive), new FileMover(), repository);
         watcher.start();
         return new Fixture(source, archive);
     }

@@ -99,7 +99,7 @@ See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
 
 ## The code
 
-Fourteen classes in one package. They are kept package-private wherever possible —
+Thirteen classes in one package. They are kept package-private wherever possible —
 only `Main` and `Config` are public — so the compiler enforces that nothing here
 is reachable from outside. That is worth more at this size than a directory per
 layer would be, but it does mean an alphabetical file listing scatters related
@@ -108,11 +108,10 @@ things, so here is the map:
 | Role | Class |
 | --- | --- |
 | Entry point and wiring | `Main` |
-| The running pipeline and its teardown | `Pipeline` |
 | Configuration | `Config` |
 | Noticing files | `SourceDetector` |
 | Reacting to each watch event | `EventKindHandler` |
-| Handing each new image to a transfer of its own | `SourceWatcher` |
+| Handing each new image to a transfer of its own, and stopping them | `SourceWatcher` |
 | Following one image from detection to the archive | `ImageTransfer` |
 | Startup recovery | `ArchiveReconciler` |
 | Naming and placement | `SatelliteImageName` (a parsed name), `ArchivePathResolver` |
