@@ -20,7 +20,6 @@ class ArchiveReconcilerIT {
 
     private Path source;
     private Path archive;
-    private final FileMover fileMover = new FileMover();
     private ArchiveRepository repository;
     private Database database;
     private ArchiveReconciler reconciler;
@@ -32,7 +31,7 @@ class ArchiveReconcilerIT {
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        reconciler = new ArchiveReconciler(source, archive, fileMover, repository);
+        reconciler = new ArchiveReconciler(source, archive, repository);
     }
 
     @AfterEach
@@ -70,7 +69,7 @@ class ArchiveReconcilerIT {
     void discardsStagingLeftBehindAndKeepsTheRowResumable() throws Exception {
         String fileName = "SAT_IMG_20240101120000000.raw";
         claim(fileName);
-        Path staging = Files.writeString(fileMover.stagingPath(destinationOf(fileName)), "abcd");
+        Path staging = Files.writeString(FileMover.stagingPath(destinationOf(fileName)), "abcd");
         Files.writeString(source.resolve(fileName), "abcdefgh");
 
         assertEquals(new ArchiveReconciler.Result(0, 1, 0), reconciler.reconcile());

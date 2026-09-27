@@ -20,19 +20,21 @@ import java.nio.file.StandardOpenOption;
 final class FileMover {
     static final long TRANSFER_CHUNK = 64L * 1024 * 1024;
 
-    Path stagingPath(Path destination) {
+    private FileMover() { }
+
+    static Path stagingPath(Path destination) {
         return destination.resolveSibling(destination.getFileName() + ".tmp");
     }
 
     /** Starts an empty staging file in its archive directory, discarding anything an earlier attempt left. */
-    void createStaging(Path staging) throws IOException {
+    static void createStaging(Path staging) throws IOException {
         Files.createDirectories(staging.getParent());
         Files.deleteIfExists(staging);
         Files.createFile(staging);
     }
 
     /** Appends {@code from..to} of the source onto staging and returns the new size. */
-    long appendRange(Path source, Path staging, long from, long to) throws IOException {
+    static long appendRange(Path source, Path staging, long from, long to) throws IOException {
         if (from < 0 || to < from) {
             throw new IllegalArgumentException("Invalid copy range " + from + ".." + to);
         }
@@ -59,14 +61,14 @@ final class FileMover {
         }
     }
 
-    void publish(Path staging, Path destination) throws IOException {
+    static void publish(Path staging, Path destination) throws IOException {
         if (Files.exists(destination)) {
             throw new FileAlreadyExistsException(destination.toString());
         }
         Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE);
     }
 
-    void rollbackPublication(Path destination, Path staging) throws IOException {
+    static void rollbackPublication(Path destination, Path staging) throws IOException {
         if (Files.exists(staging)) {
             throw new FileAlreadyExistsException(staging.toString());
         }

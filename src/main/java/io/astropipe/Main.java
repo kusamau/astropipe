@@ -44,13 +44,11 @@ public final class Main {
         Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
         logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
 
-        FileMover fileMover = new FileMover();
-
         try (Database database = new Database(config.databaseUrl())) {
             ArchiveRepository repository = new ArchiveRepository(database);
             repository.initialize();
-            recoverPreviousRun(sourceDirectory, archiveDirectory, fileMover, repository);
-            archiveUntilStopped(config, sourceDirectory, archiveDirectory, fileMover, repository);
+            recoverPreviousRun(sourceDirectory, archiveDirectory, repository);
+            archiveUntilStopped(config, sourceDirectory, archiveDirectory, repository);
         }
     }
 
@@ -58,10 +56,9 @@ public final class Main {
     private static void recoverPreviousRun(
             Path sourceDirectory,
             Path archiveDirectory,
-            FileMover fileMover,
             ArchiveRepository repository) throws IOException {
         ArchiveReconciler.Result result =
-                new ArchiveReconciler(sourceDirectory, archiveDirectory, fileMover, repository).reconcile();
+                new ArchiveReconciler(sourceDirectory, archiveDirectory, repository).reconcile();
         logger.info("Startup reconciliation: archived={} resumable={} failed={}",
                 result.archived(), result.resumable(), result.failed());
     }
@@ -71,9 +68,8 @@ public final class Main {
             Config config,
             Path sourceDirectory,
             Path archiveDirectory,
-            FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, archiveDirectory, fileMover, repository)) {
+        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, archiveDirectory, repository)) {
             watcher.start();
             // Only once started: stopping a detector that has not started shuts its listing
             // scheduler, and start() would then fail to schedule the periodic listing.

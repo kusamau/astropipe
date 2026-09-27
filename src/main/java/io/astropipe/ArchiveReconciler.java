@@ -21,17 +21,11 @@ final class ArchiveReconciler {
 
     private final Path sourceDirectory;
     private final Path archiveRoot;
-    private final FileMover fileMover;
     private final ArchiveRepository repository;
 
-    ArchiveReconciler(
-            Path sourceDirectory,
-            Path archiveRoot,
-            FileMover fileMover,
-            ArchiveRepository repository) {
+    ArchiveReconciler(Path sourceDirectory, Path archiveRoot, ArchiveRepository repository) {
         this.sourceDirectory = sourceDirectory;
         this.archiveRoot = archiveRoot;
-        this.fileMover = fileMover;
         this.repository = repository;
     }
 
@@ -88,7 +82,7 @@ final class ArchiveReconciler {
             logger.warn("Discarded an incomplete publication; it will be copied again: {}", fileName);
         }
 
-        Files.deleteIfExists(fileMover.stagingPath(destination));
+        Files.deleteIfExists(FileMover.stagingPath(destination));
         logger.info("Source survives and will be copied again from the start: {}", fileName);
         return Outcome.RESUMABLE;
     }

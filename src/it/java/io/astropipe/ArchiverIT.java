@@ -261,7 +261,7 @@ class ArchiverIT {
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        watcher = new SourceWatcher(source, config, archive, new FileMover(), repository);
+        watcher = new SourceWatcher(source, config, archive, repository);
         watcher.start();
         return new Fixture(source, archive);
     }

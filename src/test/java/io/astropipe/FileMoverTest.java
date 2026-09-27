@@ -15,19 +15,17 @@ class FileMoverTest {
     @TempDir
     Path temporaryDirectory;
 
-    private final FileMover mover = new FileMover();
-
     @Test
     void appendsOnlyTheRequestedRangeAndPublishesAtomically() throws Exception {
         Path source = Files.writeString(temporaryDirectory.resolve("source.raw"), "abcdefgh");
         Path destination = temporaryDirectory.resolve("archive.raw");
-        Path staging = mover.stagingPath(destination);
-        mover.createStaging(staging);
+        Path staging = FileMover.stagingPath(destination);
+        FileMover.createStaging(staging);
 
-        assertEquals(4, mover.appendRange(source, staging, 0, 4));
+        assertEquals(4, FileMover.appendRange(source, staging, 0, 4));
         assertEquals("abcd", Files.readString(staging));
-        assertEquals(8, mover.appendRange(source, staging, 4, 8));
-        mover.publish(staging, destination);
+        assertEquals(8, FileMover.appendRange(source, staging, 4, 8));
+        FileMover.publish(staging, destination);
 
         assertEquals("abcdefgh", Files.readString(destination));
         assertTrue(Files.exists(source), "publishing does not remove the source");
@@ -40,9 +38,9 @@ class FileMoverTest {
         for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) (i * 31 + i / 4096);
         Path source = Files.write(temporaryDirectory.resolve("source.raw"), bytes);
         Path staging = temporaryDirectory.resolve("archive.raw.tmp");
-        mover.createStaging(staging);
+        FileMover.createStaging(staging);
 
-        assertEquals(bytes.length, mover.appendRange(source, staging, 0, bytes.length));
+        assertEquals(bytes.length, FileMover.appendRange(source, staging, 0, bytes.length));
         assertEquals(-1, Files.mismatch(source, staging));
     }
 
@@ -50,7 +48,7 @@ class FileMoverTest {
     void createsTheArchiveDirectoryOfANewStagingFile() throws Exception {
         Path staging = temporaryDirectory.resolve("2021/01/02/SAT_IMG_20210102030405006.raw.tmp");
 
-        mover.createStaging(staging);
+        FileMover.createStaging(staging);
 
         assertEquals(0, Files.size(staging));
     }
@@ -59,7 +57,7 @@ class FileMoverTest {
     void startsStagingEmptyEvenWhenAPreviousAttemptLeftBytes() throws Exception {
         Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "stale");
 
-        mover.createStaging(staging);
+        FileMover.createStaging(staging);
 
         assertEquals(0, Files.size(staging));
     }
@@ -68,9 +66,9 @@ class FileMoverTest {
     void refusesToAppendAtAnOffsetThatDoesNotMatchStaging() throws Exception {
         Path source = Files.writeString(temporaryDirectory.resolve("source.raw"), "abcdefgh");
         Path staging = temporaryDirectory.resolve("archive.raw.tmp");
-        mover.createStaging(staging);
+        FileMover.createStaging(staging);
 
-        assertThrows(java.io.IOException.class, () -> mover.appendRange(source, staging, 4, 8));
+        assertThrows(java.io.IOException.class, () -> FileMover.appendRange(source, staging, 4, 8));
     }
 
     @Test
@@ -78,10 +76,10 @@ class FileMoverTest {
         Path destination = Files.writeString(temporaryDirectory.resolve("archive.raw"), "already there");
         Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "new");
 
-        assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> mover.publish(staging, destination));
+        assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> FileMover.publish(staging, destination));
 
         Files.delete(staging);
-        mover.rollbackPublication(destination, staging);
+        FileMover.rollbackPublication(destination, staging);
         assertEquals("already there", Files.readString(staging));
         assertFalse(Files.exists(destination));
     }

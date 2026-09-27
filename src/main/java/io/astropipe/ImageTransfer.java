@@ -22,16 +22,14 @@ final class ImageTransfer {
     private final Config config;
     private final StabilityDetector stabilityDetector;
     private final Path archiveRoot;
-    private final FileMover fileMover;
     private final ArchiveRepository repository;
     /** How many images may copy or publish at the same time. */
     private final Semaphore ioPermits;
 
-    ImageTransfer(Config config, Path archiveRoot, FileMover fileMover, ArchiveRepository repository) {
+    ImageTransfer(Config config, Path archiveRoot, ArchiveRepository repository) {
         this.config = config;
         this.stabilityDetector = new StabilityDetector(config.quietPeriodMillis());
         this.archiveRoot = archiveRoot;
-        this.fileMover = fileMover;
         this.repository = repository;
         this.ioPermits = new Semaphore(config.workerPoolSize());
     }
@@ -55,7 +53,7 @@ final class ImageTransfer {
         Path staging = null;
         try {
             Path destination = image.archivePath(archiveRoot);
-            staging = fileMover.stagingPath(destination);
+            staging = FileMover.stagingPath(destination);
             transfer(source, fileName, destination, staging, detection);
         } catch (ClosedByInterruptException | InterruptedException stopped) {
             Thread.currentThread().interrupt();
@@ -68,7 +66,7 @@ final class ImageTransfer {
 
     private void transfer(Path source, String fileName, Path destination, Path staging,
                           SourceDetector.Detection detection) throws IOException, InterruptedException {
-        fileMover.createStaging(staging);
+        FileMover.createStaging(staging);
         logger.info("Detected file={} detectedBy={}", fileName, detection);
 
         long copied = 0;
@@ -105,7 +103,7 @@ final class ImageTransfer {
     private long copy(Path source, Path staging, long from, long to) throws IOException, InterruptedException {
         ioPermits.acquire();
         try {
-            return fileMover.appendRange(source, staging, from, to);
+            return FileMover.appendRange(source, staging, from, to);
         } finally {
             ioPermits.release();
         }
@@ -121,11 +119,11 @@ final class ImageTransfer {
                 return Publication.RETRY;
             }
 
-            fileMover.publish(staging, destination);
+            FileMover.publish(staging, destination);
             try {
                 StabilityDetector.Snapshot after = stabilityDetector.sample(source);
                 if (!stabilityDetector.unchanged(before, after)) {
-                    fileMover.rollbackPublication(destination, staging);
+                    FileMover.rollbackPublication(destination, staging);
                     return Publication.RETRY;
                 }
                 Files.delete(source);
@@ -133,7 +131,7 @@ final class ImageTransfer {
             } catch (IOException failure) {
                 if (Files.exists(destination) && !Files.exists(staging)) {
                     try {
-                        fileMover.rollbackPublication(destination, staging);
+                        FileMover.rollbackPublication(destination, staging);
                     } catch (IOException rollbackFailure) {
                         failure.addSuppressed(rollbackFailure);
                     }
