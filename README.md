@@ -237,3 +237,18 @@ would have achieved.
 - A metrics endpoint: logs and `VALIDATION.md` are sufficient here.
 - A framework: the application is plain Java over `java.nio`, JDBC and Jackson.
 - NFS/CIFS specialization: periodic reconciliation limits missed-event risk, but remote storage needs separate operational testing.
+
+## How I built this
+
+I built Astropipe together with an AI coding assistant, Claude Code, and I'd
+rather say so openly than leave anyone guessing. I worked with it the way I'd
+work with an experienced colleague: we talked the design through, it drafted and
+reworked much of the code under my direction, and it ran the tests and
+measurements behind `VALIDATION.md`.
+
+The decisions are mine. I set the direction, pushed back when a suggestion didn't
+convince me, and kept asking questions until I could explain every part of the
+code myself, the threading model above all. It also turned out to be a great way
+to learn. The history is open about it too, since most commits carry a
+`Co-Authored-By` trailer, and I'm happy to walk through any part of the code in
+person.
