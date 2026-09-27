@@ -3,6 +3,7 @@ package io.astropipe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
@@ -52,8 +53,14 @@ final class EventKindHandler {
         scheduler.execute(() -> sweep.accept(SourceDetector.Detection.OVERFLOW_LISTING));
     }
 
-    /** A created entry's context is the file's name relative to the watched directory. */
+    /**
+     * A created entry's context is its name relative to the watched directory. Only regular
+     * files are reported, as the listings report: a directory is not an image.
+     */
     private void onCreated(WatchEvent<?> event) {
-        onDetected.accept(sourceDirectory.resolve((Path) event.context()), SourceDetector.Detection.FILE_CREATED);
+        Path created = sourceDirectory.resolve((Path) event.context());
+        if (Files.isRegularFile(created)) {
+            onDetected.accept(created, SourceDetector.Detection.FILE_CREATED);
+        }
     }
 }

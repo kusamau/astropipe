@@ -1,7 +1,10 @@
 package io.astropipe;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
@@ -11,27 +14,45 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class EventKindHandlerTest {
-    private final Path sourceDirectory = Path.of("/data/source");
+    @TempDir
+    Path sourceDirectory;
+
     private final List<Path> reported = new ArrayList<>();
     private final List<SourceDetector.Detection> detections = new ArrayList<>();
     private final List<Runnable> scheduled = new ArrayList<>();
     private final List<SourceDetector.Detection> sweeps = new ArrayList<>();
+    private EventKindHandler handler;
 
-    private final EventKindHandler handler = new EventKindHandler(
-            sourceDirectory,
-            (path, detection) -> {
-                reported.add(path);
-                detections.add(detection);
-            },
-            scheduled::add,
-            sweeps::add);
+    @BeforeEach
+    void createHandler() {
+        handler = new EventKindHandler(
+                sourceDirectory,
+                (path, detection) -> {
+                    reported.add(path);
+                    detections.add(detection);
+                },
+                scheduled::add,
+                sweeps::add);
+    }
 
     @Test
-    void reportsACreatedFileResolvedAgainstTheWatchedDirectory() {
+    void reportsACreatedFileResolvedAgainstTheWatchedDirectory() throws Exception {
+        Files.createFile(sourceDirectory.resolve("SAT_IMG_20210714102730046.raw"));
+
         handler.handle(event(StandardWatchEventKinds.ENTRY_CREATE, Path.of("SAT_IMG_20210714102730046.raw")));
 
         assertEquals(List.of(sourceDirectory.resolve("SAT_IMG_20210714102730046.raw")), reported);
         assertEquals(List.of(SourceDetector.Detection.FILE_CREATED), detections);
+    }
+
+    @Test
+    void ignoresACreatedDirectory() throws Exception {
+        // A producer's staging directory, for instance: the listings skip directories, and so does the watch.
+        Files.createDirectory(sourceDirectory.resolve(".staging"));
+
+        handler.handle(event(StandardWatchEventKinds.ENTRY_CREATE, Path.of(".staging")));
+
+        assertEquals(List.of(), reported);
     }
 
     @Test

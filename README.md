@@ -1,9 +1,9 @@
 # Astropipe
 
 Astropipe watches a local source directory for satellite images named
-`SAT_IMG_<yyyyMMddHHmmssSSS>.raw`, moves each complete file into a
-`Archive/<Year>/<Month>/<Day>` hierarchy, and records every operation in SQLite
-and in a log file.
+`SAT_IMG_<yyyyMMddHHmmssSSS>.raw`, moves each complete file into an
+`<archiveDir>/<Year>/<Month>/<Day>` hierarchy, and records each image in an
+SQLite ledger and every operation in a log file.
 
 ## Build and run
 
@@ -11,7 +11,7 @@ Requirements: Linux, Java 25 or newer, Maven 3.8 or newer.
 
 `sqlite-jdbc` carries a native library for each of 24 platforms, which is most of
 the packaged jar. The build keeps only 64-bit Linux and macOS — every machine this
-is built, reviewed or deployed on — which takes the jar from 17 MB to under 6 MB.
+is built, reviewed or deployed on — which takes the jar from 17 MB to about 6 MB.
 Running anywhere else means widening the `org.xerial:sqlite-jdbc` filter in
 `pom.xml`.
 
@@ -91,7 +91,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 42 unit tests, no database connection
+mvn test     # 43 unit tests, no database connection
 mvn verify   # adds 18 SQLite-backed integration tests under src/it/java
 ```
 
@@ -120,10 +120,10 @@ things, so here is the map:
 | The archive ledger | `ArchiveRepository` |
 | JDBC, with no domain knowledge | `Database` |
 
-An image travels through them in that order: `SourceDetector` reports every
-regular file it sees, `SourceWatcher` hands each image name to an `ImageTransfer`
-on a thread of its own, which claims it and drives it from staging to
-publication, and `ArchiveReconciler` picks up whatever a previous run left behind.
+At startup `ArchiveReconciler` resolves whatever the previous run left in
+progress. Then `SourceDetector` reports every regular file it finds, and
+`SourceWatcher` runs `ImageTransfer.archive` for each image on a virtual thread
+of its own, which claims it and drives it from staging to publication.
 
 ## Design decisions
 
@@ -163,9 +163,10 @@ drives it with a plain callback and never opens a database.
 
 Creation does not mean a producer has closed the file. The image's transfer
 samples source size and last-modified time every poll interval. Growth is
-appended to staging at once, after checking the overlap; an unchanged source
-starts the quiet period. Only after the complete quiet period does Astropipe
-atomically rename staging to the final destination and remove the source.
+appended to staging at once, after checking that the source has not shrunk; an
+unchanged source starts the quiet period. Only after the complete quiet period
+does Astropipe atomically rename staging to the final destination and remove the
+source.
 
 ### Correctness under failure
 
@@ -203,14 +204,14 @@ listings, and **each image in flight has a virtual thread of its own**. That
 thread follows the image from first detection to the archive as plain sequential
 code — claim, stage, append while the producer writes, publish once the source
 has held still — so everything it knows about the image lives in its own local
-variables. Images share only the set of names in flight, which makes the first
-sighting of a name one atomic step, and the ledger.
+variables. Images share only the set of names in flight (which makes the first
+sighting of a name one atomic step), the copy permits, and the ledger.
 
 After first detection no watch event is awaited: between checks a transfer
 sleeps for the poll interval. The quiet period is an absence of change that no
 event could announce, and events can be lost anyway. A sleeping virtual thread
-holds no platform thread, so waiting images cost memory, not CPU. For the same
-reason only `ENTRY_CREATE` is watched.
+holds no platform thread, so a waiting image costs a little memory and one check
+per poll interval. For the same reason only `ENTRY_CREATE` is watched.
 
 Copying takes one of `workerPoolSize` permits, two by default, because copy
 parallelism depends on the source and archive devices. The images waiting for a

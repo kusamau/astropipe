@@ -6,7 +6,7 @@
 mvn verify
 ```
 
-This runs 42 unit tests (`src/test/java`) and 18 integration tests (`src/it/java`), which use the
+This runs 43 unit tests (`src/test/java`) and 18 integration tests (`src/it/java`), which use the
 real filesystem, `WatchService` and SQLite. Last run: Linux, Java 25, 2026-09-27, all passing.
 
 Tests never sleep for a fixed time: they wait for a condition up to a deadline, with short poll and
@@ -20,7 +20,7 @@ between platforms.
 | `FileMoverTest` | 6 | Incremental copy into staging, atomic publish, rollback |
 | `StabilityDetectorTest` | 3 | Size and modification-time checks, quiet period |
 | `SourceDetectorTest` | 8 | Startup and periodic listings, new files, stopping |
-| `EventKindHandlerTest` | 3 | Created files, overflow, other event kinds |
+| `EventKindHandlerTest` | 4 | Created files (directories ignored), overflow, other event kinds |
 | `MainTest` | 3 | Source and archive directory checks |
 | `ArchiveRepositoryIT` | 6 | The ledger: duplicate names, status changes, what is recorded |
 | `ArchiveReconcilerIT` | 4 | Startup recovery of images left in progress |
