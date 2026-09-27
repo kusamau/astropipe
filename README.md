@@ -59,7 +59,7 @@ required; anything else falls back to the default shown here.
 | `databaseUrl` | JDBC URL of the SQLite ledger. |
 | `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
 | `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
-| `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. |
+| `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. Without `WatchService` the listing runs every second instead. |
 | `workerPoolSize` | How many images may copy at the same time. |
 
 Startup fails with a specific message on a blank required directory, a source
@@ -68,6 +68,12 @@ setting, or an inaccessible directory.
 
 Logs go to the console and to `logs/astropipe.log`, rotated daily and kept for
 14 days.
+
+If startup warns `WatchService unavailable … User limit of inotify instances
+reached`, other programs have used up the per-user inotify instances (128 by
+default on Linux). Astropipe still works, finding new files by listing the
+source directory every second; `sudo sysctl fs.inotify.max_user_instances=1024`
+brings back immediate detection.
 
 An entry the pipeline refuses — a name that is not `SAT_IMG_<timestamp>.raw`, or
 one whose 17 digits are not a real instant — is left where it is and never
@@ -95,7 +101,7 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 43 unit tests, no database connection
+mvn test     # 44 unit tests, no database connection
 mvn verify   # adds 18 SQLite-backed integration tests under src/it/java
 ```
 
@@ -160,7 +166,8 @@ are not watched, because once a file has been reported the pipeline follows it b
 polling. `WatchService` cannot recover events missed while the process was stopped and may
 overflow, so a startup listing and a periodic reconciliation listing run
 alongside it. An explicit `OVERFLOW` schedules an immediate listing. If
-`WatchService` is unavailable altogether, detection falls back to listing alone.
+`WatchService` is unavailable altogether, detection falls back to listing alone,
+every second.
 
 Keeping detection separate means it is testable on its own: `SourceDetectorTest`
 drives it with a plain callback and never opens a database.

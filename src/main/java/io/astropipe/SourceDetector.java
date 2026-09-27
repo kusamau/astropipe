@@ -30,12 +30,14 @@ import java.util.function.BiConsumer;
  * would add nothing. {@code WatchService} cannot recover events missed while the process was
  * stopped and may overflow, so a startup listing and a periodic listing run alongside
  * it, and an explicit {@code OVERFLOW} schedules an immediate listing. Where
- * {@code WatchService} is unavailable, detection falls back to listing alone.
+ * {@code WatchService} is unavailable, detection falls back to listing alone, every second.
  *
  * <p>The watch loop and the listings run on threads this class creates and ends on {@link #close()}.
  */
 final class SourceDetector implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(SourceDetector.class);
+    /** Without {@code WatchService} the listing is all the detection there is, so it runs this often. */
+    private static final int LISTING_ONLY_INTERVAL_SECONDS = 1;
 
     private final Path sourceDirectory;
     /** Runs the periodic and overflow listings, one at a time. */
@@ -68,11 +70,9 @@ final class SourceDetector implements AutoCloseable {
         running = true;
 
         sweep(Detection.STARTUP_LISTING);
+        int interval = watchServiceActive ? listingIntervalSeconds : LISTING_ONLY_INTERVAL_SECONDS;
         scheduler.scheduleAtFixedRate(
-                () -> sweep(Detection.PERIODIC_LISTING),
-                listingIntervalSeconds,
-                listingIntervalSeconds,
-                TimeUnit.SECONDS);
+                () -> sweep(Detection.PERIODIC_LISTING), interval, interval, TimeUnit.SECONDS);
 
         if (watchServiceActive) {
             watcherThread = new Thread(this::watchLoop, "source-watcher");
@@ -118,8 +118,9 @@ final class SourceDetector implements AutoCloseable {
                 }
             }
             watchService = null;
-            logger.warn("WatchService unavailable for source directory={}; "
-                    + "continuing with listing-only detection", sourceDirectory, e);
+            // The cause is the whole story (on Linux, usually the inotify limits), so no stack trace.
+            logger.warn("WatchService unavailable for source directory={}: {}. New files are found by listing it "
+                    + "every {} s instead", sourceDirectory, e, LISTING_ONLY_INTERVAL_SECONDS);
             return false;
         }
     }

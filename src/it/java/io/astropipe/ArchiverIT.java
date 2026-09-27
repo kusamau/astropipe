@@ -272,7 +272,9 @@ class ArchiverIT {
                 temporaryDirectory.resolve("source.zip"), Map.of("create", "true"));
         Path source = Files.createDirectory(sourceFileSystem.getPath("/source"));
         Files.writeString(source.resolve(startupFile), "startup");
-        return start(source, Files.createDirectory(temporaryDirectory.resolve("archive")), config(50, 100));
+        // A configured interval far beyond Await's deadline: only the listing-only interval can find new files.
+        Config config = new Config("source", "archive", null, 50, 100, 60, 2);
+        return start(source, Files.createDirectory(temporaryDirectory.resolve("archive")), config);
     }
 
     private record Fixture(Path source, Path archive) { }

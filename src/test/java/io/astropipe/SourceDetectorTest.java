@@ -4,8 +4,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.WatchService;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -14,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Detection is independent of the archive, so none of this needs a database. */
 class SourceDetectorTest {
@@ -107,12 +110,37 @@ class SourceDetectorTest {
                 () -> detections.contains(SourceDetector.Detection.PERIODIC_LISTING));
     }
 
+    @Test
+    void reportsANewFileThroughTheWatchBeforeAnyListing() throws Exception {
+        // Where the JDK cannot create a WatchService (on Linux, when the user's inotify instances
+        // are used up), detection falls back to listing and this proves nothing, so it is skipped.
+        assumeTrue(watchServiceAvailable(), "no WatchService can be created here");
+        start(3600);
+
+        Path appeared = Files.writeString(temporaryDirectory.resolve("SAT_IMG_20220101000000000.raw"), "x");
+
+        Await.until("the watch reports the new file", () -> detected.contains(appeared));
+        assertEquals(List.of(SourceDetector.Detection.FILE_CREATED), detections);
+    }
+
     private void start() {
-        detector = new SourceDetector(temporaryDirectory, 1, (path, detection) -> {
+        start(1);
+    }
+
+    private void start(int listingIntervalSeconds) {
+        detector = new SourceDetector(temporaryDirectory, listingIntervalSeconds, (path, detection) -> {
             detected.add(path);
             detections.add(detection);
         });
         detector.start();
+    }
+
+    private boolean watchServiceAvailable() {
+        try (WatchService probe = temporaryDirectory.getFileSystem().newWatchService()) {
+            return true;
+        } catch (IOException unavailable) {
+            return false;
+        }
     }
 
 }
