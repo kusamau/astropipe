@@ -4,8 +4,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Responsible to create the requested directory structure for each archived file.
@@ -13,25 +11,22 @@ import java.util.concurrent.ConcurrentHashMap;
  **/
 final class ArchivePathResolver {
     private final Path archiveRoot;
-    private final Set<Path> preparedDirectories = ConcurrentHashMap.newKeySet();
 
     ArchivePathResolver(Path archiveRoot) {
         this.archiveRoot = archiveRoot.toAbsolutePath().normalize();
     }
 
+    /** Safe to call concurrently: creating a directory that already exists, or that another caller is creating, succeeds. */
     Path resolve(SatelliteImageName image) throws IOException {
         LocalDate date = image.timestamp().toLocalDate();
         Path directory = archiveRoot
                 .resolve("%04d".formatted(date.getYear()))
                 .resolve("%02d".formatted(date.getMonthValue()))
                 .resolve("%02d".formatted(date.getDayOfMonth()));
-        if (preparedDirectories.add(directory)) {
-            try {
-                Files.createDirectories(directory);
-            } catch (IOException e) {
-                preparedDirectories.remove(directory);
-                throw new IOException("Could not create archive directory " + directory, e);
-            }
+        try {
+            Files.createDirectories(directory);
+        } catch (IOException e) {
+            throw new IOException("Could not create archive directory " + directory, e);
         }
         return directory.resolve(image.fileName());
     }

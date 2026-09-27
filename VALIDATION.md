@@ -38,7 +38,7 @@ once at a fixed moment.
 | Use a JSON configuration file | `ConfigTest` (7 tests), M5 |
 | Source folder configurable | `ConfigTest.loadsTheShippedConfigurationFile`, M5 |
 | Archive folder configurable | `ConfigTest.loadsTheShippedConfigurationFile`, M5 |
-| Create `<Year>/<Month>/<Day>` if missing, zero-padded | `ArchivePathResolverTest` (2 tests), M2 |
+| Create `<Year>/<Month>/<Day>` if missing, zero-padded | `ArchivePathResolverTest` (3 tests), M2 |
 | Record file name, time saved and saved folder | `ArchiveRepositoryIT.recordsNameSavedTimeAndSavedFolderOnArchive`, M3 |
 | Never process the same name twice | `ArchiveRepositoryIT.primaryKeyIsAuthoritativeDedupeGuard`, M6 |
 
@@ -47,7 +47,7 @@ once at a fixed moment.
 `mvn verify` on Linux, Java 25, run 2026-09-27:
 
 ```
-Tests run: 39, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 40, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 15, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -56,7 +56,7 @@ BUILD SUCCESS
 | --- | ---: | --- |
 | `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
 | `SatelliteImageNameTest` | 10 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
-| `ArchivePathResolverTest` | 2 | Zero-padded hierarchy, creation, year boundary |
+| `ArchivePathResolverTest` | 3 | Zero-padded hierarchy, creation, year boundary, many callers racing for the same new day |
 | `FileMoverTest` | 4 | Ranged append, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
