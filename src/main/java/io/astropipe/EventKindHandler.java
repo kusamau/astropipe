@@ -41,8 +41,7 @@ final class EventKindHandler {
     void handle(WatchEvent<?> event) {
         switch (event.kind()) {
             case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow();
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE ->
-                    report(event, SourceDetector.Detection.FILE_CREATED);
+            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE -> onCreated(event);
             default -> logger.warn("Ignoring unexpected watch event kind={}", event.kind());
         }
     }
@@ -53,9 +52,9 @@ final class EventKindHandler {
         scheduler.execute(() -> sweep.accept(SourceDetector.Detection.OVERFLOW_LISTING));
     }
 
-    /** An entry event's context is the file's name relative to the watched directory. */
-    private void report(WatchEvent<?> event, SourceDetector.Detection detection) {
+    /** A created entry's context is the file's name relative to the watched directory. */
+    private void onCreated(WatchEvent<?> event) {
         Path path = sourceDirectory.resolve((Path) event.context());
-        onDetected.accept(path.toAbsolutePath().normalize(), detection);
+        onDetected.accept(path.toAbsolutePath().normalize(), SourceDetector.Detection.FILE_CREATED);
     }
 }
