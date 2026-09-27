@@ -44,8 +44,7 @@ required; anything else falls back to the default shown here.
   "quietPeriodMillis": 250,
   "reconciliationIntervalSeconds": 30,
 
-  "workerPoolSize": 2,
-  "workerQueueCapacity": 10000
+  "workerPoolSize": 2
 }
 ```
 
@@ -57,7 +56,7 @@ required; anything else falls back to the default shown here.
 | `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
 | `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
 | `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. |
-| `workerPoolSize` / `workerQueueCapacity` | Copy and publication thread pool. |
+| `workerPoolSize` | How many images may copy or publish at the same time. |
 
 Startup fails with a specific message on a blank required directory, a source
 and archive that resolve to the same path, a negative tuning value, an unknown
@@ -100,7 +99,7 @@ See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
 
 ## The code
 
-Twelve classes in one package. They are kept package-private wherever possible —
+Fourteen classes in one package. They are kept package-private wherever possible —
 only `Main` and `Config` are public — so the compiler enforces that nothing here
 is reachable from outside. That is worth more at this size than a directory per
 layer would be, but it does mean an alphabetical file listing scatters related
@@ -113,7 +112,8 @@ things, so here is the map:
 | Configuration | `Config` |
 | Noticing files | `SourceDetector` |
 | Reacting to each watch event | `EventKindHandler` |
-| Deciding what happens to one | `SourceWatcher` |
+| Handing each new image to a transfer of its own | `SourceWatcher` |
+| Following one image from detection to the archive | `ImageTransfer` |
 | Startup recovery | `ArchiveReconciler` |
 | Naming and placement | `SatelliteImageName` (a parsed name), `ArchivePathResolver` |
 | Knowing a file is finished | `StabilityDetector` |
@@ -122,9 +122,9 @@ things, so here is the map:
 | JDBC, with no domain knowledge | `Database` |
 
 An image travels through them in that order: `SourceDetector` reports every
-regular file it sees, `SourceWatcher` decides whether it is an image worth
-claiming and drives it from staging to publication, and `ArchiveReconciler`
-picks up whatever a previous run left behind.
+regular file it sees, `SourceWatcher` hands each image name to an `ImageTransfer`
+on a thread of its own, which claims it and drives it from staging to
+publication, and `ArchiveReconciler` picks up whatever a previous run left behind.
 
 ## Design decisions
 
@@ -162,11 +162,11 @@ alongside it. An explicit `OVERFLOW` schedules an immediate listing. If
 Keeping detection separate means it is testable on its own: `SourceDetectorTest`
 drives it with a plain callback and never opens a database.
 
-Creation does not mean a producer has closed the file. Source size and
-last-modified time are sampled on the scheduled thread. Growth submits another
-overlap-validated append pass; an unchanged source starts the quiet period. Only
-after the complete quiet period does Astropipe atomically rename staging to the
-final destination and remove the source.
+Creation does not mean a producer has closed the file. The image's transfer
+samples source size and last-modified time every poll interval. Growth is
+appended to staging at once, after checking the overlap; an unchanged source
+starts the quiet period. Only after the complete quiet period does Astropipe
+atomically rename staging to the final destination and remove the source.
 
 ### Correctness under failure
 
@@ -174,8 +174,10 @@ The SQLite primary key on `file_name` is the authoritative deduplication guard:
 a name that is already `ARCHIVED` or `FAILED` is never processed again. A row is
 `IN_PROGRESS` from the moment the file is claimed until publication sets
 `ARCHIVED` along with the saved time and saved folder, or a contract violation or
-unrecoverable I/O error sets `FAILED`. Copy progress is deliberately not
-recorded, because no staging file outlives the process that wrote it.
+unrecoverable I/O error sets `FAILED`. Stopping is neither: a transfer interrupted
+by shutdown leaves its row `IN_PROGRESS` for the next start. Copy progress is
+deliberately not recorded, because no staging file outlives the process that
+wrote it.
 
 On restart, `ArchiveReconciler` compares every in-progress row against the
 filesystem. A surviving source is the authority: any staging file is deleted, and
@@ -197,28 +199,32 @@ followed by a write.
 
 ### Concurrency and backpressure
 
-One thread blocks in the watch loop and one scheduled thread owns the pipeline.
-Copy and publication work uses a fixed pool with a bounded `ArrayBlockingQueue`
-and `CallerRunsPolicy`. When the queue fills, the submitting thread performs the
-work and naturally slows intake instead of growing the heap without limit.
+One thread blocks in the watch loop, one scheduled thread runs the directory
+listings, and **each image in flight has a virtual thread of its own**. That
+thread follows the image from first detection to the archive as plain sequential
+code — claim, stage, append while the producer writes, publish once the source
+has held still — so everything it knows about the image lives in its own local
+variables. Images share only the set of names in flight, which makes the first
+sighting of a name one atomic step, and the ledger.
 
-Two workers are the default because copy parallelism depends on the source and
-archive devices; both pool size and queue capacity are configurable.
+After first detection no watch event is awaited: between checks a transfer
+sleeps for the poll interval. The quiet period is an absence of change that no
+event could announce, and events can be lost anyway. A sleeping virtual thread
+holds no platform thread, so waiting images cost memory, not CPU. For the same
+reason only `ENTRY_CREATE` is watched.
 
-**All per-file state is confined to the scheduler thread.** It alone decides what
-happens to a tracked image and mutates its record; workers run blocking I/O,
-return a value, and touch nothing shared. Handing work to an executor and posting
-the result back supplies the happens-before edges in both directions, so
-`SourceWatcher` needs no locks, no atomics and no `volatile` — a plain `HashMap`
-and plain fields. The invariant that makes it safe is that a tracked file has at
-most one outstanding action, which holds structurally because only one method
-chooses the next one.
+Copying and publication each take one of `workerPoolSize` permits, two by
+default, because copy parallelism depends on the source and archive devices.
+The images waiting for a permit are the queue.
 
-One consequence worth knowing: because the scheduler submits the work, a full
-worker queue makes `CallerRunsPolicy` run a copy on the scheduler thread, pausing
-quiet-period polling until it finishes. Publication is delayed, never incorrect —
-the quiet period is a floor, not a ceiling — and the default queue holds 10,000
-entries.
+Java 25 is required because on 21 a virtual thread blocking inside a
+`synchronized` method, as every `Database` method is, pins the platform thread
+carrying it (fixed by JEP 491 in Java 24).
+
+Shutdown interrupts transfers instead of waiting for them. An interrupted
+transfer leaves its row `IN_PROGRESS`, never `FAILED`, and startup reconciliation
+copies the image again from the start, which is all waiting out a long copy
+would have achieved.
 
 ## What I deliberately did not build
 

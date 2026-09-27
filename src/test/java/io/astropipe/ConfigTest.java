@@ -35,7 +35,6 @@ class ConfigTest {
         assertEquals(250, config.quietPeriodMillis());
         assertEquals(30, config.reconciliationIntervalSeconds());
         assertEquals(2, config.workerPoolSize());
-        assertEquals(10_000, config.workerQueueCapacity());
     }
 
     @Test
@@ -45,7 +44,7 @@ class ConfigTest {
                 """);
 
         assertEquals(4, config.workerPoolSize());
-        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0, 0).workerPoolSize());
+        assertEquals(2, new Config("source", "archive", null, 0, 0, 0, 0).workerPoolSize());
     }
 
     @Test

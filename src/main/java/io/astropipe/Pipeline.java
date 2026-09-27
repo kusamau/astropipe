@@ -1,24 +1,23 @@
 package io.astropipe;
 
 import java.nio.file.Path;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
- * The watcher, the two thread pools it runs on, and their teardown.
+ * The watcher, the executors it runs on, and their teardown.
  *
- * <p>This exists to own the order things stop in. The watcher stops accepting work first,
- * the scheduler then stops polling, and the workers finish what they are already holding —
- * which has to happen before the caller closes the database underneath them.
+ * <p>This exists to own the order things stop in: transfers are interrupted, detection stops,
+ * the scheduler stops listing, and the transfers have ended — all before the caller closes
+ * the database underneath them. Each image gets a virtual thread of its own for as long as
+ * it is in flight.
  *
  * <p>Constructing one starts nothing, so a caller can hold it before {@link #start()} runs
  * and still be sure {@link #close()} will take down whatever starting managed to build.
  */
 final class Pipeline implements AutoCloseable {
-    private final ThreadPoolExecutor workers;
+    private final ExecutorService transfers;
     private final ScheduledExecutorService scheduler;
     private final SourceWatcher watcher;
 
@@ -28,18 +27,11 @@ final class Pipeline implements AutoCloseable {
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository) {
-        this.workers = new ThreadPoolExecutor(
-                config.workerPoolSize(),
-                config.workerPoolSize(),
-                0L,
-                TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(config.workerQueueCapacity()),
-                Thread.ofPlatform().name("archive-worker-", 1).factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+        this.transfers = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("transfer-", 1).factory());
         this.scheduler = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("reconciliation-", 1).factory());
         this.watcher = new SourceWatcher(
-                sourceDirectory, config, pathResolver, fileMover, repository, workers, scheduler);
+                sourceDirectory, config, pathResolver, fileMover, repository, transfers, scheduler);
     }
 
     /** Opens the watch and starts reporting. Whatever this half-builds, {@link #close()} takes down. */
@@ -59,10 +51,12 @@ final class Pipeline implements AutoCloseable {
 
     @Override
     public void close() {
-        // Reverse order of the resource list, and the language still closes the rest
-        // if one of them throws on the way out.
-        try (workers; scheduler; watcher) {
-            // Nothing to do here: closing them in order is the whole job.
+        // Interrupt rather than drain: an interrupted transfer leaves its image in progress
+        // for startup reconciliation, so waiting out a long copy would buy nothing. The
+        // resources then close in reverse order, and the language still closes the rest if
+        // one of them throws on the way out.
+        try (transfers; scheduler; watcher) {
+            transfers.shutdownNow();
         }
     }
 }

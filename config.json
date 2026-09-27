@@ -7,6 +7,5 @@
   "quietPeriodMillis": 250,
   "reconciliationIntervalSeconds": 30,
 
-  "workerPoolSize": 2,
-  "workerQueueCapacity": 10000
+  "workerPoolSize": 2
 }

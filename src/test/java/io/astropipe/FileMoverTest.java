@@ -35,6 +35,18 @@ class FileMoverTest {
     }
 
     @Test
+    void copiesARangeSpanningSeveralTransferCallsIntact() throws Exception {
+        byte[] bytes = new byte[Math.toIntExact(FileMover.TRANSFER_CHUNK * 2 + 3)];
+        for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) (i * 31 + i / 4096);
+        Path source = Files.write(temporaryDirectory.resolve("source.raw"), bytes);
+        Path staging = temporaryDirectory.resolve("archive.raw.tmp");
+        mover.createStaging(staging);
+
+        assertEquals(bytes.length, mover.appendRange(source, staging, 0, bytes.length));
+        assertEquals(-1, Files.mismatch(source, staging));
+    }
+
+    @Test
     void startsStagingEmptyEvenWhenAPreviousAttemptLeftBytes() throws Exception {
         Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "stale");
 

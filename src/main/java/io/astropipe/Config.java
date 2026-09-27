@@ -18,8 +18,7 @@ public record Config(
         int pollIntervalMillis,
         int quietPeriodMillis,
         int reconciliationIntervalSeconds,
-        int workerPoolSize,
-        int workerQueueCapacity) {
+        int workerPoolSize) {
 
     public Config {
         // Reject what cannot be defaulted...
@@ -36,7 +35,6 @@ public record Config(
         quietPeriodMillis = positive(quietPeriodMillis, 250, "quietPeriodMillis");
         reconciliationIntervalSeconds = positive(reconciliationIntervalSeconds, 30, "reconciliationIntervalSeconds");
         workerPoolSize = positive(workerPoolSize, 2, "workerPoolSize");
-        workerQueueCapacity = positive(workerQueueCapacity, 10_000, "workerQueueCapacity");
     }
 
     public static Config load(Path file) throws IOException {

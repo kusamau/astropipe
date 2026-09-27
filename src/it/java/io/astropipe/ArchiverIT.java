@@ -12,11 +12,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -32,7 +33,7 @@ class ArchiverIT {
     Path temporaryDirectory;
 
     private SourceWatcher watcher;
-    private ThreadPoolExecutor workers;
+    private ExecutorService transfers;
     private ScheduledExecutorService scheduler;
     private FileSystem sourceFileSystem;
     private ArchiveRepository repository;
@@ -42,9 +43,9 @@ class ArchiverIT {
     void tearDown() throws Exception {
         if (watcher != null) watcher.close();
         if (scheduler != null) scheduler.shutdownNow();
-        if (workers != null) {
-            workers.shutdown();
-            workers.awaitTermination(5, TimeUnit.SECONDS);
+        if (transfers != null) {
+            transfers.shutdownNow();
+            transfers.awaitTermination(5, TimeUnit.SECONDS);
         }
         if (database != null) database.close();
         if (sourceFileSystem != null) sourceFileSystem.close();
@@ -52,7 +53,7 @@ class ArchiverIT {
 
     /** The pipeline settings the watcher reads, tuned down so tests stay fast. */
     private static Config config(int pollMillis, int quietMillis) {
-        return new Config("source", "archive", null, pollMillis, quietMillis, 1, 2, 100);
+        return new Config("source", "archive", null, pollMillis, quietMillis, 1, 2);
     }
 
     @Test
@@ -169,6 +170,39 @@ class ArchiverIT {
         assertFalse(Files.exists(staging));
     }
 
+    @Test
+    void archivesManyImagesOfTheSameDayArrivingTogether() throws Exception {
+        Fixture fixture = start(config(10, 50), null);
+        List<Path> destinations = new ArrayList<>();
+        for (int image = 0; image < 50; image++) {
+            String fileName = "SAT_IMG_20240304120000%03d.raw".formatted(image);
+            Files.writeString(fixture.source.resolve(fileName), "image " + image);
+            destinations.add(fixture.archive.resolve("2024/03/04").resolve(fileName));
+        }
+
+        Await.until("every image is archived", () -> destinations.stream().allMatch(Files::exists));
+        try (var remaining = Files.list(fixture.source)) {
+            assertEquals(0, remaining.count(), "every source is removed once its image is published");
+        }
+    }
+
+    @Test
+    void leavesATransferStoppedMidwayInProgressForTheNextStart() throws Exception {
+        // A quiet period long enough that the transfer is still waiting when it is stopped.
+        Fixture fixture = start(config(25, 60_000), null);
+        String fileName = "SAT_IMG_20240305120000000.raw";
+        Path source = Files.writeString(fixture.source.resolve(fileName), "abcdefgh");
+        Path staging = fixture.archive.resolve("2024/03/05").resolve(fileName + ".tmp");
+        Await.until("the source is fully staged", () -> Files.exists(staging) && Files.size(staging) == 8);
+
+        transfers.shutdownNow();
+        assertTrue(transfers.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertEquals(List.of(fileName), repository.inProgressFileNames(),
+                "a stop is not a failure: startup reconciliation must be able to pick the image up again");
+        assertTrue(Files.exists(source));
+    }
+
     /** Writes in place, slowly, running {@code afterEachChunk} once every chunk lands. */
     private static void writeInChunks(Path path, int chunks, Runnable afterEachChunk)
             throws IOException, InterruptedException {
@@ -197,11 +231,10 @@ class ArchiverIT {
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(100), new ThreadPoolExecutor.CallerRunsPolicy());
+        transfers = Executors.newVirtualThreadPerTaskExecutor();
         scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(source, config, new ArchivePathResolver(archive),
-                new FileMover(), repository, workers, scheduler);
+                new FileMover(), repository, transfers, scheduler);
         watcher.start();
         return new Fixture(source, archive);
     }

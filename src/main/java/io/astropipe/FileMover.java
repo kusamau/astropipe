@@ -18,6 +18,7 @@ import java.nio.file.StandardOpenOption;
  * checkpoint to carry across processes and no resume boundary to validate.
  */
 final class FileMover {
+    static final long TRANSFER_CHUNK = 64L * 1024 * 1024;
 
     Path stagingPath(Path destination) {
         return destination.resolveSibling(destination.getFileName() + ".tmp");
@@ -43,10 +44,10 @@ final class FileMover {
             }
             output.position(from);
             long position = from;
-            // transferTo moves what the platform is willing to move in one call - Linux
-            // stops at 0x7ffff000 - and reports how much, so a large image needs the loop.
+            // Each call is capped because a file copy already in the kernel ignores an interrupt:
+            // shutdown then takes effect between chunks rather than after the whole image.
             while (position < to) {
-                long transferred = input.transferTo(position, to - position, output);
+                long transferred = input.transferTo(position, Math.min(to - position, TRANSFER_CHUNK), output);
                 if (transferred <= 0) {
                     throw new IOException("Copy made no progress for " + source + " at byte " + position);
                 }
