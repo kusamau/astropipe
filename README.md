@@ -9,6 +9,10 @@ SQLite ledger and every operation in a log file.
 
 Requirements: Linux, Java 25 or newer, Maven 3.8 or newer.
 
+Maven itself must run on JDK 25. It follows `JAVA_HOME`, which can point to a
+different JDK than the `java` on your `PATH`, so check with `mvn -v`; on an
+older JDK the build stops at once and says so.
+
 `sqlite-jdbc` carries a native library for each of 24 platforms, which is most of
 the packaged jar. The build keeps only 64-bit Linux and macOS — every machine this
 is built, reviewed or deployed on — which takes the jar from 17 MB to about 6 MB.

@@ -12,9 +12,9 @@
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jackson.version>2.18.2</jackson.version>
-        <logback.version>1.5.16</logback.version>
-        <junit.version>5.11.4</junit.version>
+        <jackson.version>2.22.3</jackson.version>
+        <logback.version>1.6.3</logback.version>
+        <junit.version>6.1.3</junit.version>
     </properties>
 
     <dependencies>
@@ -44,6 +44,29 @@
     <build>
         <finalName>astropipe</finalName>
         <plugins>
+            <plugin>
+                <!-- Fails fast, and says why, when Maven itself runs on an older JDK than the
+                     compiler needs: javac would otherwise only report an unsupported release. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.6.3</version>
+                <executions>
+                    <execution>
+                        <id>require-jdk-25</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[25,)</version>
+                                    <message>Astropipe builds with JDK 25 or newer, but Maven is running on Java ${java.version} from ${java.home}. Point JAVA_HOME at a JDK 25 and check with mvn -v.</message>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
