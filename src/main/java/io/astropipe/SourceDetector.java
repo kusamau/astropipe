@@ -21,8 +21,8 @@ import java.util.function.BiConsumer;
  * how it was found, to a sink. It does not interpret names: deciding what is a
  * satellite image is the pipeline's job.
  *
- * <p>Each report carries a {@link Detection} saying how the file was found, which lets
- * the pipeline tell a first sighting apart from a re-scan of everything.
+ * <p>Each report carries a {@link Detection} saying how the file was found, which the
+ * pipeline logs with every file it takes on or refuses.
  *
  * <p>{@code WatchService} supplies low-latency {@code ENTRY_CREATE} events. Modifications are
  * not watched: once a file has been reported the pipeline follows it by polling, so an event
@@ -157,29 +157,17 @@ final class SourceDetector implements AutoCloseable {
         onDetected.accept(path.toAbsolutePath().normalize(), detection);
     }
 
-    /**
-     * How a file came to be reported.
-     *
-     * <p>{@link #firstSighting()} separates the two that can plausibly be the first time
-     * this run has seen a given file from the listings that re-report everything already
-     * there. Only the former deserve to be noisy about a file the pipeline will reject.
-     */
+    /** How a file came to be reported. */
     enum Detection {
-        STARTUP_LISTING("startup listing", true),
-        FILE_CREATED("watch ENTRY_CREATE", true),
-        PERIODIC_LISTING("periodic listing", false),
-        OVERFLOW_LISTING("overflow listing", false);
+        STARTUP_LISTING("startup listing"),
+        FILE_CREATED("watch ENTRY_CREATE"),
+        PERIODIC_LISTING("periodic listing"),
+        OVERFLOW_LISTING("overflow listing");
 
         private final String label;
-        private final boolean firstSighting;
 
-        Detection(String label, boolean firstSighting) {
+        Detection(String label) {
             this.label = label;
-            this.firstSighting = firstSighting;
-        }
-
-        boolean firstSighting() {
-            return firstSighting;
         }
 
         @Override

@@ -1,8 +1,13 @@
 package io.astropipe;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -13,6 +18,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -38,9 +44,12 @@ class ArchiverIT {
     private FileSystem sourceFileSystem;
     private ArchiveRepository repository;
     private Database database;
+    private final ListAppender<ILoggingEvent> watcherLog = new ListAppender<>();
 
     @AfterEach
     void tearDown() throws Exception {
+        watcherLogger().detachAppender(watcherLog);
+        watcherLogger().setLevel(null);
         if (watcher != null) watcher.close();
         if (scheduler != null) scheduler.shutdownNow();
         if (transfers != null) {
@@ -201,6 +210,36 @@ class ArchiverIT {
         assertEquals(List.of(fileName), repository.inProgressFileNames(),
                 "a stop is not a failure: startup reconciliation must be able to pick the image up again");
         assertTrue(Files.exists(source));
+    }
+
+    @Test
+    void warnsOnceAboutAMalformedNameEvenWhenOnlyListingsFindIt() throws Exception {
+        // Without a WatchService, a file that appears after startup is only ever met by listings.
+        watcherLogger().setLevel(Level.DEBUG);
+        watcherLog.start();
+        watcherLogger().addAppender(watcherLog);
+        Fixture fixture = startWithoutWatchService("SAT_IMG_20231231235959999.raw");
+
+        Files.writeString(fixture.source.resolve("not-an-image.txt"), "stray");
+
+        Await.until("two periodic listings have met the stray file", () -> strayFileReports().size() >= 2);
+        List<Level> levels = strayFileReports();
+        assertEquals(Level.WARN, levels.getFirst(), "the first time this run meets a stray file is worth a warning");
+        assertEquals(1, Collections.frequency(levels, Level.WARN), "and only the first time");
+    }
+
+    private static Logger watcherLogger() {
+        return (Logger) LoggerFactory.getLogger(SourceWatcher.class);
+    }
+
+    /** Levels of the watcher's reports about the stray file, oldest first. */
+    private List<Level> strayFileReports() {
+        synchronized (watcherLog) { // appenders append under their own lock
+            return watcherLog.list.stream()
+                    .filter(event -> event.getFormattedMessage().contains("not-an-image.txt"))
+                    .map(ILoggingEvent::getLevel)
+                    .toList();
+        }
     }
 
     /** Writes in place, slowly, running {@code afterEachChunk} once every chunk lands. */

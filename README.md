@@ -67,9 +67,9 @@ Logs go to the console and to `logs/astropipe.log`, rotated daily and kept for
 
 An entry the pipeline refuses — a name that is not `SAT_IMG_<timestamp>.raw`, or
 one whose 17 digits are not a real instant — is left where it is and never
-claimed, so every later listing finds it again. It is reported at `WARN` when it
-could be a first sighting, meaning a watch event or the startup listing, and at
-`DEBUG` on the periodic re-scans. An operator therefore hears about a stray file
+claimed, so every later listing finds it again. It is reported at `WARN` the
+first time the run meets it, whether a watch event or a listing found it, and at
+`DEBUG` on every later listing. An operator therefore hears about a stray file
 once per run rather than once per sweep for as long as the process lives.
 
 ## Input data

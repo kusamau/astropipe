@@ -18,8 +18,9 @@ The suites were also checked against deliberately broken production code, so tha
 passing means something:
 - breaking the deduplication guard was caught by `ArchiveRepositoryIT`;
 - keeping a truncated publication instead of discarding it was caught by `ArchiveReconcilerIT`;
-- publishing without waiting for the quiet period, and recording a transfer stopped by
-  shutdown as `FAILED`, were both caught by `ArchiverIT`.
+- publishing without waiting for the quiet period, recording a transfer stopped by
+  shutdown as `FAILED`, and choosing the level of a stray file's warning by what found it
+  (or warning on every listing) were all caught by `ArchiverIT`.
 
 The same-day directory race in `ArchivePathResolver` also failed its test on every run
 before the fix.
@@ -52,7 +53,7 @@ once at a fixed moment.
 
 ```
 Tests run: 41, Failures: 0, Errors: 0, Skipped: 0   (surefire)
-Tests run: 17, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
+Tests run: 18, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
 
@@ -65,11 +66,11 @@ BUILD SUCCESS
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
-| `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, first sightings vs repeat listings |
+| `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, what was already there labelled as the startup listing, a file left in place re-reported by every periodic listing |
 | `EventKindHandlerTest` | 3 | Created files reported with their path resolved against the watched directory, overflow answered with a listing on the scheduler rather than inline, unregistered kinds ignored |
 | `ArchiveRepositoryIT` | 6 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous` |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
-| `ArchiverIT` | 7 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded, many same-day images at once, a transfer stopped midway left in progress |
+| `ArchiverIT` | 8 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded, many same-day images at once, a transfer stopped midway left in progress, a stray file warned about once even when only listings find it |
 
 ## Manual end-to-end test cases
 
