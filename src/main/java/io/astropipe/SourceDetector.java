@@ -46,7 +46,7 @@ final class SourceDetector implements AutoCloseable {
 
     private WatchService watchService;
     private Thread watcherThread;
-    private final WatchEventClassifier classifier;
+    private final EventKindHandler eventKindHandler;
 
     SourceDetector(
             Path sourceDirectory,
@@ -57,7 +57,8 @@ final class SourceDetector implements AutoCloseable {
         this.scheduler = scheduler;
         this.listingIntervalSeconds = listingIntervalSeconds;
         this.onDetected = onDetected;
-        this.classifier = new WatchEventClassifier(sourceDirectory);
+        this.eventKindHandler = new EventKindHandler(
+                sourceDirectory, onDetected, () -> scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING)));
     }
 
     /** Reports everything already present, then keeps reporting until closed. */
@@ -128,7 +129,7 @@ final class SourceDetector implements AutoCloseable {
             while (running) {
                 WatchKey key = watchService.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
-                    onWatchEvent(event);
+                    eventKindHandler.handle(event);
                 }
                 if (!key.reset()) {
                     logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
@@ -142,18 +143,6 @@ final class SourceDetector implements AutoCloseable {
         } finally {
             running = false;
             stopped.countDown();
-        }
-    }
-
-    private void onWatchEvent(WatchEvent<?> event) {
-        switch (classifier.classify(event)) {
-            case WatchEventClassifier.Overflow() -> {
-                logger.warn("WatchService overflow detected; scheduling an immediate listing");
-                scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING));
-            }
-            case WatchEventClassifier.FileEvent(Path path, Detection detection) -> report(path, detection);
-            case WatchEventClassifier.Unexpected(WatchEvent.Kind<?> kind) ->
-                    logger.warn("Ignoring unexpected watch event kind={}", kind);
         }
     }
 
