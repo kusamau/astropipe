@@ -126,15 +126,7 @@ final class SourceDetector implements AutoCloseable {
             while (running) {
                 WatchKey key = watchService.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
-                    if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
-                        logger.warn("WatchService overflow detected; scheduling an immediate listing");
-                        scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING));
-                        continue;
-                    }
-                    Path context = (Path) event.context();
-                    report(sourceDirectory.resolve(context),
-                            event.kind() == StandardWatchEventKinds.ENTRY_CREATE
-                                    ? Detection.FILE_CREATED : Detection.FILE_MODIFIED);
+                    onWatchEvent(event);
                 }
                 if (!key.reset()) {
                     logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
@@ -149,6 +141,36 @@ final class SourceDetector implements AutoCloseable {
             running = false;
             stopped.countDown();
         }
+    }
+
+    /**
+     * {@link StandardWatchEventKinds}' constants are plain {@code WatchEvent.Kind} instances,
+     * not an enum, so a guard stands in for the case label a real enum switch would allow.
+     */
+    private void onWatchEvent(WatchEvent<?> event) {
+        switch (event.kind()) {
+            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow();
+            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE -> onEntryCreated(event);
+            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_MODIFY -> onEntryModified(event);
+            default -> logger.warn("Ignoring unexpected watch event kind={}", event.kind());
+        }
+    }
+
+    private void onOverflow() {
+        logger.warn("WatchService overflow detected; scheduling an immediate listing");
+        scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING));
+    }
+
+    private void onEntryCreated(WatchEvent<?> event) {
+        report(contextPath(event), Detection.FILE_CREATED);
+    }
+
+    private void onEntryModified(WatchEvent<?> event) {
+        report(contextPath(event), Detection.FILE_MODIFIED);
+    }
+
+    private Path contextPath(WatchEvent<?> event) {
+        return sourceDirectory.resolve((Path) event.context());
     }
 
     private void sweep(Detection detection) {
