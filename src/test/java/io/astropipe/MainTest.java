@@ -16,7 +16,7 @@ class MainTest {
     Path temporaryDirectory;
 
     @Test
-    void createsMissingArchiveDirectoryWithParents() throws Exception {
+    void createsMissingArchiveRootWithParents() throws Exception {
         Path archive = temporaryDirectory.resolve("nested/archive");
 
         assertEquals(archive, Main.directory(archive.toString(), "archiveDir", true));

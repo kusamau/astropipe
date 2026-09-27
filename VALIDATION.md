@@ -62,7 +62,7 @@ BUILD SUCCESS
 | `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
 | `SatelliteImageNameTest` | 12 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates, placement under the zero-padded date, year boundary |
 | `FileMoverTest` | 6 | Ranged append, a range spanning several transfer calls, atomic publish, the day directory created for new staging, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
-| `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
+| `MainTest` | 3 | Archive root creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
 | `SourceDetectorTest` | 8 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, its listing thread ended when closed, what was already there labelled as the startup listing, a file left in place re-reported by every periodic listing |
@@ -82,7 +82,7 @@ Images were 8 MB of `/dev/urandom` unless a case says otherwise.
 1. `rm -rf data logs && mkdir -p data/source`
 2. `java -jar target/astropipe.jar`
 
-**Expected:** archive directory created, both file stores logged, reconciliation
+**Expected:** archive root created, both file stores logged, reconciliation
 reports zeroes, monitoring begins.
 **Observed:** pass.
 

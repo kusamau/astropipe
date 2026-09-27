@@ -40,25 +40,25 @@ public final class Main {
         Path sourceDirectory = directory(config.sourceDir(), "sourceDir", false);
         logger.info("Source directory={} store={}", sourceDirectory, Files.getFileStore(sourceDirectory));
 
-        // Archive directory Path
-        Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
-        logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
+        // Archive root Path
+        Path archiveRoot = directory(config.archiveDir(), "archiveDir", true);
+        logger.info("Archive root={} store={}", archiveRoot, Files.getFileStore(archiveRoot));
 
         try (Database database = new Database(config.databaseUrl())) {
             ArchiveRepository repository = new ArchiveRepository(database);
             repository.initialize();
-            recoverPreviousRun(sourceDirectory, archiveDirectory, repository);
-            archiveUntilStopped(config, sourceDirectory, archiveDirectory, repository);
+            recoverPreviousRun(sourceDirectory, archiveRoot, repository);
+            archiveUntilStopped(config, sourceDirectory, archiveRoot, repository);
         }
     }
 
     /** Resolves whatever the last run left mid-flight before new work is accepted. */
     private static void recoverPreviousRun(
             Path sourceDirectory,
-            Path archiveDirectory,
+            Path archiveRoot,
             ArchiveRepository repository) throws IOException {
         ArchiveReconciler.Result result =
-                new ArchiveReconciler(sourceDirectory, archiveDirectory, repository).reconcile();
+                new ArchiveReconciler(sourceDirectory, archiveRoot, repository).reconcile();
         logger.info("Startup reconciliation: archived={} resumable={} failed={}",
                 result.archived(), result.resumable(), result.failed());
     }
@@ -67,9 +67,9 @@ public final class Main {
     private static void archiveUntilStopped(
             Config config,
             Path sourceDirectory,
-            Path archiveDirectory,
+            Path archiveRoot,
             ArchiveRepository repository) throws InterruptedException {
-        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, archiveDirectory, repository)) {
+        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, archiveRoot, repository)) {
             watcher.start();
             // Only once started: stopping a detector that has not started shuts its listing
             // scheduler, and start() would then fail to schedule the periodic listing.
