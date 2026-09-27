@@ -67,11 +67,6 @@ final class Database implements AutoCloseable {
         }
     }
 
-    /** Reads an integer PRAGMA on this connection. Some PRAGMAs are per-connection. */
-    synchronized int pragma(String name) {
-        return queryOne("PRAGMA " + name, row -> row.getInt(1));
-    }
-
     @Override
     public synchronized void close() {
         try {

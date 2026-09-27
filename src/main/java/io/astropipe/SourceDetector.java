@@ -55,10 +55,11 @@ final class SourceDetector implements AutoCloseable {
     private final EventKindHandler eventKindHandler;
 
     SourceDetector(Path sourceDirectory, int listingIntervalSeconds, BiConsumer<Path, Detection> onDetected) {
-        this.sourceDirectory = sourceDirectory;
+        // Normalized once: every path reported is this directory resolved against a plain file name.
+        this.sourceDirectory = sourceDirectory.toAbsolutePath().normalize();
         this.listingIntervalSeconds = listingIntervalSeconds;
         this.onDetected = onDetected;
-        this.eventKindHandler = new EventKindHandler(sourceDirectory, onDetected, scheduler, this::sweep);
+        this.eventKindHandler = new EventKindHandler(this.sourceDirectory, onDetected, scheduler, this::sweep);
     }
 
     /** Reports everything already present, then keeps reporting until closed. */
@@ -149,14 +150,10 @@ final class SourceDetector implements AutoCloseable {
         if (!running) return;
         try (var paths = Files.list(sourceDirectory)) {
             // A listing still running when the detector closes stops at its next entry.
-            paths.filter(Files::isRegularFile).takeWhile(path -> running).forEach(path -> report(path, detection));
+            paths.filter(Files::isRegularFile).takeWhile(path -> running).forEach(path -> onDetected.accept(path, detection));
         } catch (IOException e) {
             logger.error("Could not perform {} of source directory={}", detection, sourceDirectory, e);
         }
-    }
-
-    private void report(Path path, Detection detection) {
-        onDetected.accept(path.toAbsolutePath().normalize(), detection);
     }
 
     /** How a file came to be reported. */

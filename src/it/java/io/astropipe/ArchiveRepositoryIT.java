@@ -104,7 +104,7 @@ class ArchiveRepositoryIT {
         // journal_mode is persisted in the database file; synchronous is per-connection,
         // so it has to be read back on the connection the repository actually writes on.
         assertEquals("wal", database.queryOne("PRAGMA journal_mode", r -> r.getString(1)).toLowerCase());
-        assertEquals(1, database.pragma("synchronous"));
+        assertEquals(1, database.<Integer>queryOne("PRAGMA synchronous", r -> r.getInt(1)));
     }
 
     private String column(String name, String fileName) {

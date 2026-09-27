@@ -54,7 +54,6 @@ final class EventKindHandler {
 
     /** A created entry's context is the file's name relative to the watched directory. */
     private void onCreated(WatchEvent<?> event) {
-        Path path = sourceDirectory.resolve((Path) event.context());
-        onDetected.accept(path.toAbsolutePath().normalize(), SourceDetector.Detection.FILE_CREATED);
+        onDetected.accept(sourceDirectory.resolve((Path) event.context()), SourceDetector.Detection.FILE_CREATED);
     }
 }

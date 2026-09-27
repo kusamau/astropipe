@@ -35,7 +35,6 @@ final class ArchiveRepository {
                 """);
         // Partial and covering: only in-progress rows are indexed, and they are transient,
         // so the startup lookup stays instant however large the archive grows.
-        database.execute("DROP INDEX IF EXISTS idx_archived_file_status");
         database.execute("""
                 CREATE INDEX IF NOT EXISTS idx_archived_file_in_progress
                 ON archived_file(file_name) WHERE status = 'IN_PROGRESS'
