@@ -32,7 +32,7 @@ once at a fixed moment.
 
 | Requirement | Verified by |
 | --- | --- |
-| Monitor the source folder | `SourceDetectorTest` (5 tests), `ArchiverIT.archivesStartupAndWatchEventsAndIgnoresMalformedFiles`, `ArchiverIT.fallsBackToReconciliationWhenWatchServiceIsUnavailable`, M1 |
+| Monitor the source folder | `SourceDetectorTest` (5 tests), `WatchEventClassifierTest` (4 tests), `ArchiverIT.archivesStartupAndWatchEventsAndIgnoresMalformedFiles`, `ArchiverIT.fallsBackToReconciliationWhenWatchServiceIsUnavailable`, M1 |
 | Move images to the archive as fast as possible | `ArchiverIT.doesNotMoveFileWhileUnsafeGeneratorIsStillWriting`, M2 |
 | Log all file operations to a log file | M4 |
 | Use a JSON configuration file | `ConfigTest` (7 tests), M5 |
@@ -44,10 +44,10 @@ once at a fixed moment.
 
 ## Automated results
 
-`mvn verify` on Linux, Java 21, run 2026-09-26:
+`mvn verify` on Linux, Java 21, run 2026-09-27:
 
 ```
-Tests run: 36, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 40, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 15, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -62,6 +62,7 @@ BUILD SUCCESS
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
 | `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, first sightings vs repeat listings |
+| `WatchEventClassifierTest` | 4 | Overflow classified without a file context, created and modified entries resolved against the watched directory, unregistered kinds set aside |
 | `ArchiveRepositoryIT` | 6 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous` |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |
 | `ArchiverIT` | 5 | Startup and watch detection, malformed files ignored, no move while a producer writes, listing-only fallback, source shrink failed, stale staging discarded |

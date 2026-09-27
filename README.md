@@ -111,7 +111,7 @@ things, so here is the map:
 | Entry point and wiring | `Main` |
 | The running pipeline and its teardown | `Pipeline` |
 | Configuration | `Config` |
-| Noticing files | `SourceDetector` |
+| Noticing files | `SourceDetector`, `WatchEventClassifier` (what a raw watch event means) |
 | Deciding what happens to one | `SourceWatcher` |
 | Startup recovery | `ArchiveReconciler` |
 | Naming and placement | `SatelliteImageName` (a parsed name), `ArchivePathResolver` |
