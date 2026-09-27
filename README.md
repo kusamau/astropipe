@@ -20,8 +20,8 @@ mvn clean package
 ./scripts/run.sh
 ```
 
-`scripts/run.sh` builds the jar if needed, creates `data/source`, `data/archive`
-and `logs`, and starts the application. To run it by hand:
+`scripts/run.sh` creates `data/source`, `data/archive` and `logs`, and starts the
+jar built by `mvn clean package`. To run it by hand:
 
 ```bash
 java -jar target/astropipe.jar [path/to/config.json]
@@ -91,8 +91,8 @@ mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
 ## Tests
 
 ```bash
-mvn test     # 36 functional tests, no database connection
-mvn verify   # adds 15 SQLite-backed integration tests under src/it/java
+mvn test     # 42 unit tests, no database connection
+mvn verify   # adds 18 SQLite-backed integration tests under src/it/java
 ```
 
 See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
