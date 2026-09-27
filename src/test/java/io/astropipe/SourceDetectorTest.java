@@ -10,8 +10,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,13 +22,11 @@ class SourceDetectorTest {
 
     private final Set<Path> detected = ConcurrentHashMap.newKeySet();
     private final List<SourceDetector.Detection> detections = new CopyOnWriteArrayList<>();
-    private ScheduledExecutorService scheduler;
     private SourceDetector detector;
 
     @AfterEach
     void tearDown() {
         if (detector != null) detector.close();
-        if (scheduler != null) scheduler.shutdownNow();
     }
 
     @Test
@@ -81,6 +77,17 @@ class SourceDetectorTest {
     }
 
     @Test
+    void endsItsListingThreadWhenClosed() throws Exception {
+        start();
+
+        detector.close();
+
+        // Left running, it would be a non-daemon thread keeping the JVM alive.
+        Await.until("the listing thread has ended", () -> Thread.getAllStackTraces().keySet().stream()
+                .noneMatch(thread -> thread.getName().startsWith("reconciliation-")));
+    }
+
+    @Test
     void labelsWhatWasAlreadyThereAsTheStartupListing() throws Exception {
         Files.writeString(temporaryDirectory.resolve("SAT_IMG_20210714102730046.raw"), "x");
 
@@ -101,8 +108,7 @@ class SourceDetectorTest {
     }
 
     private void start() {
-        scheduler = Executors.newSingleThreadScheduledExecutor();
-        detector = new SourceDetector(temporaryDirectory, scheduler, 1, (path, detection) -> {
+        detector = new SourceDetector(temporaryDirectory, 1, (path, detection) -> {
             detected.add(path);
             detections.add(detection);
         });

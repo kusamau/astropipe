@@ -52,7 +52,7 @@ once at a fixed moment.
 `mvn verify` on Linux, Java 25, run 2026-09-27:
 
 ```
-Tests run: 41, Failures: 0, Errors: 0, Skipped: 0   (surefire)
+Tests run: 42, Failures: 0, Errors: 0, Skipped: 0   (surefire)
 Tests run: 18, Failures: 0, Errors: 0, Skipped: 0   (failsafe)
 BUILD SUCCESS
 ```
@@ -66,7 +66,7 @@ BUILD SUCCESS
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |
-| `SourceDetectorTest` | 7 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, what was already there labelled as the startup listing, a file left in place re-reported by every periodic listing |
+| `SourceDetectorTest` | 8 | Startup listing, files appearing later, every regular file reported, directories skipped, silence after close, its listing thread ended when closed, what was already there labelled as the startup listing, a file left in place re-reported by every periodic listing |
 | `EventKindHandlerTest` | 3 | Created files reported with their path resolved against the watched directory, overflow answered with a listing on the scheduler rather than inline, unregistered kinds ignored |
 | `ArchiveRepositoryIT` | 6 | Dedupe key, terminal-name reporting, archive bookkeeping, refusal of absent/terminal transitions, in-progress listing, WAL and `synchronous` |
 | `ArchiveReconcilerIT` | 4 | Published file adopted, identical leftover source removed, incomplete publication discarded, stale staging discarded, unrecoverable shapes failed |

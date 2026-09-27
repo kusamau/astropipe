@@ -12,6 +12,7 @@ import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -30,12 +31,16 @@ import java.util.function.BiConsumer;
  * stopped and may overflow, so a startup listing and a periodic listing run alongside
  * it, and an explicit {@code OVERFLOW} schedules an immediate listing. Where
  * {@code WatchService} is unavailable, detection falls back to listing alone.
+ *
+ * <p>The watch loop and the listings run on threads this class creates and ends on {@link #close()}.
  */
 final class SourceDetector implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(SourceDetector.class);
 
     private final Path sourceDirectory;
-    private final ScheduledExecutorService scheduler;
+    /** Runs the periodic and overflow listings, one at a time. */
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().name("reconciliation-", 1).factory());
     private final int listingIntervalSeconds;
     private final BiConsumer<Path, Detection> onDetected;
     private final CountDownLatch stopped = new CountDownLatch(1);
@@ -49,13 +54,8 @@ final class SourceDetector implements AutoCloseable {
     private Thread watcherThread;
     private final EventKindHandler eventKindHandler;
 
-    SourceDetector(
-            Path sourceDirectory,
-            ScheduledExecutorService scheduler,
-            int listingIntervalSeconds,
-            BiConsumer<Path, Detection> onDetected) {
+    SourceDetector(Path sourceDirectory, int listingIntervalSeconds, BiConsumer<Path, Detection> onDetected) {
         this.sourceDirectory = sourceDirectory;
-        this.scheduler = scheduler;
         this.listingIntervalSeconds = listingIntervalSeconds;
         this.onDetected = onDetected;
         this.eventKindHandler = new EventKindHandler(sourceDirectory, onDetected, scheduler, this::sweep);
@@ -97,6 +97,7 @@ final class SourceDetector implements AutoCloseable {
             }
         }
         if (watcherThread != null) watcherThread.interrupt();
+        scheduler.shutdownNow();
         stopped.countDown();
     }
 
@@ -147,7 +148,8 @@ final class SourceDetector implements AutoCloseable {
     private void sweep(Detection detection) {
         if (!running) return;
         try (var paths = Files.list(sourceDirectory)) {
-            paths.filter(Files::isRegularFile).forEach(path -> report(path, detection));
+            // A listing still running when the detector closes stops at its next entry.
+            paths.filter(Files::isRegularFile).takeWhile(path -> running).forEach(path -> report(path, detection));
         } catch (IOException e) {
             logger.error("Could not perform {} of source directory={}", detection, sourceDirectory, e);
         }

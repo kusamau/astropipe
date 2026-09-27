@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * Hands each newly detected image to an {@link ImageTransfer} running on a thread of its own.
@@ -31,12 +30,10 @@ final class SourceWatcher implements AutoCloseable {
             ArchivePathResolver pathResolver,
             FileMover fileMover,
             ArchiveRepository repository,
-            Executor transfers,
-            ScheduledExecutorService scheduler) {
+            Executor transfers) {
         this.transfer = new ImageTransfer(config, pathResolver, fileMover, repository);
         this.transfers = transfers;
-        this.detector = new SourceDetector(
-                sourceDirectory, scheduler, config.reconciliationIntervalSeconds(), this::onDetected);
+        this.detector = new SourceDetector(sourceDirectory, config.reconciliationIntervalSeconds(), this::onDetected);
     }
 
     void start() {

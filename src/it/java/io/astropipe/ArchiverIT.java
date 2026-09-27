@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,7 +39,6 @@ class ArchiverIT {
 
     private SourceWatcher watcher;
     private ExecutorService transfers;
-    private ScheduledExecutorService scheduler;
     private FileSystem sourceFileSystem;
     private ArchiveRepository repository;
     private Database database;
@@ -51,7 +49,6 @@ class ArchiverIT {
         watcherLogger().detachAppender(watcherLog);
         watcherLogger().setLevel(null);
         if (watcher != null) watcher.close();
-        if (scheduler != null) scheduler.shutdownNow();
         if (transfers != null) {
             transfers.shutdownNow();
             transfers.awaitTermination(5, TimeUnit.SECONDS);
@@ -271,9 +268,8 @@ class ArchiverIT {
         repository = new ArchiveRepository(database);
         repository.initialize();
         transfers = Executors.newVirtualThreadPerTaskExecutor();
-        scheduler = Executors.newSingleThreadScheduledExecutor();
         watcher = new SourceWatcher(source, config, new ArchivePathResolver(archive),
-                new FileMover(), repository, transfers, scheduler);
+                new FileMover(), repository, transfers);
         watcher.start();
         return new Fixture(source, archive);
     }
