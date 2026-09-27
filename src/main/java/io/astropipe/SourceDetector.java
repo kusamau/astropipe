@@ -46,6 +46,7 @@ final class SourceDetector implements AutoCloseable {
 
     private WatchService watchService;
     private Thread watcherThread;
+    private final EventKindHandler eventKindHandler;
 
     SourceDetector(
             Path sourceDirectory,
@@ -56,6 +57,8 @@ final class SourceDetector implements AutoCloseable {
         this.scheduler = scheduler;
         this.listingIntervalSeconds = listingIntervalSeconds;
         this.onDetected = onDetected;
+        this.eventKindHandler = new EventKindHandler(
+                sourceDirectory, onDetected, () -> scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING)));
     }
 
     /** Reports everything already present, then keeps reporting until closed. */
@@ -126,7 +129,7 @@ final class SourceDetector implements AutoCloseable {
             while (running) {
                 WatchKey key = watchService.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
-                    onWatchEvent(event);
+                    eventKindHandler.handle(event);
                 }
                 if (!key.reset()) {
                     logger.error("Source directory watch key is no longer valid: {}", sourceDirectory);
@@ -141,36 +144,6 @@ final class SourceDetector implements AutoCloseable {
             running = false;
             stopped.countDown();
         }
-    }
-
-    /**
-     * {@link StandardWatchEventKinds}' constants are plain {@code WatchEvent.Kind} instances,
-     * not an enum, so a guard stands in for the case label a real enum switch would allow.
-     */
-    private void onWatchEvent(WatchEvent<?> event) {
-        switch (event.kind()) {
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow();
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE -> onEntryCreated(event);
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_MODIFY -> onEntryModified(event);
-            default -> logger.warn("Ignoring unexpected watch event kind={}", event.kind());
-        }
-    }
-
-    private void onOverflow() {
-        logger.warn("WatchService overflow detected; scheduling an immediate listing");
-        scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING));
-    }
-
-    private void onEntryCreated(WatchEvent<?> event) {
-        report(contextPath(event), Detection.FILE_CREATED);
-    }
-
-    private void onEntryModified(WatchEvent<?> event) {
-        report(contextPath(event), Detection.FILE_MODIFIED);
-    }
-
-    private Path contextPath(WatchEvent<?> event) {
-        return sourceDirectory.resolve((Path) event.context());
     }
 
     private void sweep(Detection detection) {
