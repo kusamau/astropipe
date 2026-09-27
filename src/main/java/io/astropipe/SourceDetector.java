@@ -57,8 +57,7 @@ final class SourceDetector implements AutoCloseable {
         this.scheduler = scheduler;
         this.listingIntervalSeconds = listingIntervalSeconds;
         this.onDetected = onDetected;
-        this.eventKindHandler = new EventKindHandler(
-                sourceDirectory, onDetected, () -> scheduler.execute(() -> sweep(Detection.OVERFLOW_LISTING)));
+        this.eventKindHandler = new EventKindHandler(sourceDirectory, onDetected, scheduler, this::sweep);
     }
 
     /** Reports everything already present, then keeps reporting until closed. */

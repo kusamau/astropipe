@@ -112,6 +112,7 @@ things, so here is the map:
 | The running pipeline and its teardown | `Pipeline` |
 | Configuration | `Config` |
 | Noticing files | `SourceDetector` |
+| Reacting to each watch event | `EventKindHandler` |
 | Deciding what happens to one | `SourceWatcher` |
 | Startup recovery | `ArchiveReconciler` |
 | Naming and placement | `SatelliteImageName` (a parsed name), `ArchivePathResolver` |

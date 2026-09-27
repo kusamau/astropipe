@@ -6,33 +6,41 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
- * Turns a raw watch event into the detector's own vocabulary: an overflow, a new file,
- * or a changed one. {@link StandardWatchEventKinds}' constants are plain
- * {@code WatchEvent.Kind} instances, not an enum, so a guard stands in for the case
- * label a real enum switch would allow.
+ * Decides what each raw watch event leads to: a new or changed file is reported to the
+ * pipeline, and an overflow is answered with an immediate listing, since only a listing can
+ * tell which files the lost events were about. {@link SourceDetector} supplies the means —
+ * the sink, the scheduler and its listing — and every decision is made here.
+ *
+ * <p>{@link StandardWatchEventKinds}' constants are plain {@code WatchEvent.Kind} instances,
+ * not an enum, so a guard stands in for the case label a real enum switch would allow.
  */
 final class EventKindHandler {
     private static final Logger logger = LoggerFactory.getLogger(EventKindHandler.class);
 
     private final Path sourceDirectory;
     private final BiConsumer<Path, SourceDetector.Detection> onDetected;
-    private final Runnable onOverflow;
+    private final Executor scheduler;
+    private final Consumer<SourceDetector.Detection> sweep;
 
     EventKindHandler(
             Path sourceDirectory,
             BiConsumer<Path, SourceDetector.Detection> onDetected,
-            Runnable onOverflow) {
+            Executor scheduler,
+            Consumer<SourceDetector.Detection> sweep) {
         this.sourceDirectory = sourceDirectory;
         this.onDetected = onDetected;
-        this.onOverflow = onOverflow;
+        this.scheduler = scheduler;
+        this.sweep = sweep;
     }
 
     void handle(WatchEvent<?> event) {
         switch (event.kind()) {
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow.run();
+            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow();
             case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE ->
                     report(event, SourceDetector.Detection.FILE_CREATED);
             case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_MODIFY ->
@@ -41,6 +49,13 @@ final class EventKindHandler {
         }
     }
 
+    /** On the scheduler, not inline: the watcher thread has to get back to draining events. */
+    private void onOverflow() {
+        logger.warn("WatchService overflow detected; scheduling an immediate listing");
+        scheduler.execute(() -> sweep.accept(SourceDetector.Detection.OVERFLOW_LISTING));
+    }
+
+    /** An entry event's context is the file's name relative to the watched directory. */
     private void report(WatchEvent<?> event, SourceDetector.Detection detection) {
         Path path = sourceDirectory.resolve((Path) event.context());
         onDetected.accept(path.toAbsolutePath().normalize(), detection);
