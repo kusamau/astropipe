@@ -26,7 +26,7 @@
         <dependency>
             <groupId>org.xerial</groupId>
             <artifactId>sqlite-jdbc</artifactId>
-            <version>3.47.2.0</version>
+            <version>3.53.4.0</version>
         </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
@@ -70,12 +70,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.6.0</version>
                 <configuration>
                     <includes>
                         <include>**/*Test.java</include>
@@ -85,7 +85,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.6.1</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <id>add-it-source</id>
@@ -104,7 +104,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.6.0</version>
                 <configuration>
                     <!-- sqlite-jdbc loads a native library, which JDK 24+ warns about unless allowed. -->
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>
@@ -124,7 +124,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -162,7 +162,6 @@
                                     <excludes>
                                         <exclude>org/sqlite/native/Windows/**</exclude>
                                         <exclude>org/sqlite/native/FreeBSD/**</exclude>
-                                        <exclude>org/sqlite/native/Linux-Android/**</exclude>
                                         <exclude>org/sqlite/native/Linux-Musl/**</exclude>
                                         <exclude>org/sqlite/native/Linux/x86/**</exclude>
                                         <exclude>org/sqlite/native/Linux/arm/**</exclude>
