@@ -44,7 +44,7 @@ once at a fixed moment.
 
 ## Automated results
 
-`mvn verify` on Linux, Java 21, run 2026-09-27:
+`mvn verify` on Linux, Java 25, run 2026-09-27:
 
 ```
 Tests run: 40, Failures: 0, Errors: 0, Skipped: 0   (surefire)

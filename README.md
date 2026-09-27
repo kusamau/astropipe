@@ -7,7 +7,7 @@ and in a log file.
 
 ## Build and run
 
-Requirements: Linux, Java 21 or newer, Maven 3.8 or newer.
+Requirements: Linux, Java 25 or newer, Maven 3.8 or newer.
 
 `sqlite-jdbc` carries a native library for each of 24 platforms, which is most of
 the packaged jar. The build keeps only 64-bit Linux and macOS — every machine this

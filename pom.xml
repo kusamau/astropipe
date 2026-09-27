@@ -10,7 +10,7 @@
     <name>Astropipe</name>
 
     <properties>
-        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jackson.version>2.18.2</jackson.version>
         <logback.version>1.5.16</logback.version>
@@ -83,6 +83,8 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
+                    <!-- sqlite-jdbc loads a native library, which JDK 24+ warns about unless allowed. -->
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                     <includes>
                         <include>**/*IT.java</include>
                     </includes>
@@ -111,6 +113,9 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>io.astropipe.Main</mainClass>
+                                    <manifestEntries>
+                                        <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+                                    </manifestEntries>
                                 </transformer>
                             </transformers>
                             <filters>
