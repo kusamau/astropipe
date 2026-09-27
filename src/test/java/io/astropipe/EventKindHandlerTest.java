@@ -35,14 +35,6 @@ class EventKindHandlerTest {
     }
 
     @Test
-    void reportsAModifiedFileResolvedAgainstTheWatchedDirectory() {
-        handler.handle(event(StandardWatchEventKinds.ENTRY_MODIFY, Path.of("SAT_IMG_20210714102730046.raw")));
-
-        assertEquals(List.of(sourceDirectory.resolve("SAT_IMG_20210714102730046.raw")), reported);
-        assertEquals(List.of(SourceDetector.Detection.FILE_MODIFIED), detections);
-    }
-
-    @Test
     void answersAnOverflowWithAListingOnTheScheduler() {
         // An overflow has no context: reading one as a file name would fail on null.
         handler.handle(event(StandardWatchEventKinds.OVERFLOW, null));

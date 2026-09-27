@@ -24,8 +24,9 @@ import java.util.function.BiConsumer;
  * <p>Each report carries a {@link Detection} saying how the file was found, which lets
  * the pipeline tell a first sighting apart from a re-scan of everything.
  *
- * <p>{@code WatchService} supplies low-latency {@code ENTRY_CREATE} and
- * {@code ENTRY_MODIFY} events. It cannot recover events missed while the process was
+ * <p>{@code WatchService} supplies low-latency {@code ENTRY_CREATE} events. Modifications are
+ * not watched: once a file has been reported the pipeline follows it by polling, so an event
+ * would add nothing. {@code WatchService} cannot recover events missed while the process was
  * stopped and may overflow, so a startup listing and a periodic listing run alongside
  * it, and an explicit {@code OVERFLOW} schedules an immediate listing. Where
  * {@code WatchService} is unavailable, detection falls back to listing alone.
@@ -103,9 +104,7 @@ final class SourceDetector implements AutoCloseable {
         WatchService candidate = null;
         try {
             candidate = sourceDirectory.getFileSystem().newWatchService();
-            sourceDirectory.register(candidate,
-                    StandardWatchEventKinds.ENTRY_CREATE,
-                    StandardWatchEventKinds.ENTRY_MODIFY);
+            sourceDirectory.register(candidate, StandardWatchEventKinds.ENTRY_CREATE);
             watchService = candidate;
             return true;
         } catch (IOException | UnsupportedOperationException e) {
@@ -168,7 +167,6 @@ final class SourceDetector implements AutoCloseable {
     enum Detection {
         STARTUP_LISTING("startup listing", true),
         FILE_CREATED("watch ENTRY_CREATE", true),
-        FILE_MODIFIED("watch ENTRY_MODIFY", true),
         PERIODIC_LISTING("periodic listing", false),
         OVERFLOW_LISTING("overflow listing", false);
 

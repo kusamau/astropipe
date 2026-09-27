@@ -11,8 +11,8 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
- * Decides what each raw watch event leads to: a new or changed file is reported to the
- * pipeline, and an overflow is answered with an immediate listing, since only a listing can
+ * Decides what each raw watch event leads to: a new file is reported to the pipeline,
+ * and an overflow is answered with an immediate listing, since only a listing can
  * tell which files the lost events were about. {@link SourceDetector} supplies the means —
  * the sink, the scheduler and its listing — and every decision is made here.
  *
@@ -43,8 +43,6 @@ final class EventKindHandler {
             case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.OVERFLOW -> onOverflow();
             case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_CREATE ->
                     report(event, SourceDetector.Detection.FILE_CREATED);
-            case WatchEvent.Kind<?> kind when kind == StandardWatchEventKinds.ENTRY_MODIFY ->
-                    report(event, SourceDetector.Detection.FILE_MODIFIED);
             default -> logger.warn("Ignoring unexpected watch event kind={}", event.kind());
         }
     }

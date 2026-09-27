@@ -152,8 +152,9 @@ contract; the row becomes `FAILED` and both artifacts are preserved.
 
 `SourceDetector` owns this and nothing else: it reports every regular file in the
 source directory, with how it was found, and leaves interpreting the name to the
-pipeline. `WatchService` supplies low-latency `ENTRY_CREATE` and `ENTRY_MODIFY`
-events. It cannot recover events missed while the process was stopped and may
+pipeline. `WatchService` supplies low-latency `ENTRY_CREATE` events; modifications
+are not watched, because once a file has been reported the pipeline follows it by
+polling. `WatchService` cannot recover events missed while the process was stopped and may
 overflow, so a startup listing and a periodic reconciliation listing run
 alongside it. An explicit `OVERFLOW` schedules an immediate listing. If
 `WatchService` is unavailable altogether, detection falls back to listing alone.
