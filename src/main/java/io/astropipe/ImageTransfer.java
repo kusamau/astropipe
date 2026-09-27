@@ -23,7 +23,7 @@ final class ImageTransfer {
     private final StabilityDetector stabilityDetector;
     private final Path archiveRoot;
     private final ArchiveRepository repository;
-    /** How many images may copy or publish at the same time. */
+    /** How many images may copy at the same time. */
     private final Semaphore ioPermits;
 
     ImageTransfer(Config config, Path archiveRoot, ArchiveRepository repository) {
@@ -109,37 +109,36 @@ final class ImageTransfer {
         }
     }
 
-    /** Publishes staging, or reports that the source moved and the quiet period must restart. */
+    /**
+     * Publishes staging, or reports that the source moved and the quiet period must restart.
+     * It takes no permit: publishing is a rename, and queued behind the waiting copies it would
+     * hold every copied image, and its source, until the whole backlog had been copied.
+     */
     private Publication publish(Path source, Path staging, Path destination, long copied,
-                                StabilityDetector.Snapshot quietFrom) throws IOException, InterruptedException {
-        ioPermits.acquire();
+                                StabilityDetector.Snapshot quietFrom) throws IOException {
+        StabilityDetector.Snapshot before = stabilityDetector.sample(source);
+        if (before.size() != copied || !stabilityDetector.unchanged(quietFrom, before)) {
+            return Publication.RETRY;
+        }
+
+        FileMover.publish(staging, destination);
         try {
-            StabilityDetector.Snapshot before = stabilityDetector.sample(source);
-            if (before.size() != copied || !stabilityDetector.unchanged(quietFrom, before)) {
+            StabilityDetector.Snapshot after = stabilityDetector.sample(source);
+            if (!stabilityDetector.unchanged(before, after)) {
+                FileMover.rollbackPublication(destination, staging);
                 return Publication.RETRY;
             }
-
-            FileMover.publish(staging, destination);
-            try {
-                StabilityDetector.Snapshot after = stabilityDetector.sample(source);
-                if (!stabilityDetector.unchanged(before, after)) {
+            Files.delete(source);
+            return Publication.DONE;
+        } catch (IOException failure) {
+            if (Files.exists(destination) && !Files.exists(staging)) {
+                try {
                     FileMover.rollbackPublication(destination, staging);
-                    return Publication.RETRY;
+                } catch (IOException rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
                 }
-                Files.delete(source);
-                return Publication.DONE;
-            } catch (IOException failure) {
-                if (Files.exists(destination) && !Files.exists(staging)) {
-                    try {
-                        FileMover.rollbackPublication(destination, staging);
-                    } catch (IOException rollbackFailure) {
-                        failure.addSuppressed(rollbackFailure);
-                    }
-                }
-                throw failure;
             }
-        } finally {
-            ioPermits.release();
+            throw failure;
         }
     }
 

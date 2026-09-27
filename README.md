@@ -56,7 +56,7 @@ required; anything else falls back to the default shown here.
 | `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
 | `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
 | `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. |
-| `workerPoolSize` | How many images may copy or publish at the same time. |
+| `workerPoolSize` | How many images may copy at the same time. |
 
 Startup fails with a specific message on a blank required directory, a source
 and archive that resolve to the same path, a negative tuning value, an unknown
@@ -212,9 +212,11 @@ event could announce, and events can be lost anyway. A sleeping virtual thread
 holds no platform thread, so waiting images cost memory, not CPU. For the same
 reason only `ENTRY_CREATE` is watched.
 
-Copying and publication each take one of `workerPoolSize` permits, two by
-default, because copy parallelism depends on the source and archive devices.
-The images waiting for a permit are the queue.
+Copying takes one of `workerPoolSize` permits, two by default, because copy
+parallelism depends on the source and archive devices. The images waiting for a
+permit are the queue. Publication takes none: it is a rename, and queued behind
+the copies it would hold every copied image, and its source, until the whole
+backlog had been copied.
 
 Java 25 is required because on 21 a virtual thread blocking inside a
 `synchronized` method, as every `Database` method is, pins the platform thread

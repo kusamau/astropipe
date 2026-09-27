@@ -266,20 +266,42 @@ copy stopped at one 64 MiB transfer call: a file copy already in the kernel igno
 an interrupt, so `FileMover` caps each call. Before that cap, the same stop waited
 8.2 s for the whole gigabyte to be copied and then discarded it.
 
-### M11 — Copies are bounded by `workerPoolSize`
+### M11 — Copies are bounded by `workerPoolSize`; publication does not queue
 
 1. Drop six 256 MB images into `data/source` at once (default `workerPoolSize` of 2).
 2. While they copy, take thread dumps (`jcmd <pid> Thread.dump_to_file`) about every
    300 ms.
+3. Repeat, send SIGTERM one second after the first two images are fully staged, and
+   start again.
 
-**Expected:** never more than two transfers copying at once; the others wait for
-a permit; all six archived.
-**Observed:** pass. Copying / waiting for a permit, per dump:
+**Expected:** never more than two transfers copying at once, the others waiting for
+a permit; each image published one quiet period after its own copy, however many
+copies are still queued; all six archived. The stopped run keeps what it published,
+and the restart copies only the rest again.
+**Observed:** pass. Copying / waiting to copy / waiting to publish, per dump, then the
+seconds from first detection until each image was fully staged and until it was archived:
 
 ```
-2/4  2/4  2/4  2/4  2/4  2/4  2/4  2/2  2/4  2/4  2/4  0/0  0/0
+2/4/0  2/2/0  2/0/0  0/0/0
+staged:    0.60  0.60  1.15  1.16  1.67  1.79
+archived:  0.87  0.87  1.41  1.42  1.94  2.05
 archived: 6 of 6; errors in log: 0
+stopped run: 4 of 6 archived; restart: resumable=2, all six byte-identical
 ```
+
+When publication took a permit too, a copied image queued behind every copy still
+waiting, so nothing was published until the whole burst had been copied:
+
+```
+2/4/0  2/4/0  2/4/0  2/2/2  2/2/2  2/2/2  2/2/2  2/2/2  2/0/4  2/0/4  2/0/4  2/0/4  0/0/0
+staged:    3.13  3.13  5.97  5.98  8.94  8.94
+archived:  8.96  8.96  8.97  8.97  9.20  9.20
+stopped run: 0 of 6 archived; restart: resumable=6
+```
+
+Copy speed varied from run to run on this disk, with either build: the first pair took
+0.45–3.1 s. What changed is the wait from an image's own copy to its publication:
+0.26–0.30 s for every image now, against up to 5.8 s before.
 
 ## Known gaps
 
