@@ -20,17 +20,17 @@ final class ArchiveReconciler {
     private static final Logger logger = LoggerFactory.getLogger(ArchiveReconciler.class);
 
     private final Path sourceDirectory;
-    private final ArchivePathResolver pathResolver;
+    private final Path archiveRoot;
     private final FileMover fileMover;
     private final ArchiveRepository repository;
 
     ArchiveReconciler(
             Path sourceDirectory,
-            ArchivePathResolver pathResolver,
+            Path archiveRoot,
             FileMover fileMover,
             ArchiveRepository repository) {
         this.sourceDirectory = sourceDirectory;
-        this.pathResolver = pathResolver;
+        this.archiveRoot = archiveRoot;
         this.fileMover = fileMover;
         this.repository = repository;
     }
@@ -53,9 +53,9 @@ final class ArchiveReconciler {
         Path source = sourceDirectory.resolve(fileName);
         Path destination;
         try {
-            destination = pathResolver.resolve(SatelliteImageName.parse(fileName));
-        } catch (SatelliteImageName.InvalidNameException | IOException e) {
-            logger.warn("In-progress row has an invalid or unresolvable destination: {}", fileName, e);
+            destination = SatelliteImageName.parse(fileName).archivePath(archiveRoot);
+        } catch (SatelliteImageName.InvalidNameException e) {
+            logger.warn("In-progress row has an invalid name: {}", fileName, e);
             return fail(fileName);
         }
 

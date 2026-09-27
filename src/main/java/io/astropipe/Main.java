@@ -44,27 +44,24 @@ public final class Main {
         Path archiveDirectory = directory(config.archiveDir(), "archiveDir", true);
         logger.info("Archive directory={} store={}", archiveDirectory, Files.getFileStore(archiveDirectory));
 
-        // Responsible to create the required Path for each file to be archived
-        ArchivePathResolver pathResolver = new ArchivePathResolver(archiveDirectory);
-
         FileMover fileMover = new FileMover();
 
         try (Database database = new Database(config.databaseUrl())) {
             ArchiveRepository repository = new ArchiveRepository(database);
             repository.initialize();
-            recoverPreviousRun(sourceDirectory, pathResolver, fileMover, repository);
-            archiveUntilStopped(config, sourceDirectory, pathResolver, fileMover, repository);
+            recoverPreviousRun(sourceDirectory, archiveDirectory, fileMover, repository);
+            archiveUntilStopped(config, sourceDirectory, archiveDirectory, fileMover, repository);
         }
     }
 
     /** Resolves whatever the last run left mid-flight before new work is accepted. */
     private static void recoverPreviousRun(
             Path sourceDirectory,
-            ArchivePathResolver pathResolver,
+            Path archiveDirectory,
             FileMover fileMover,
             ArchiveRepository repository) throws IOException {
         ArchiveReconciler.Result result =
-                new ArchiveReconciler(sourceDirectory, pathResolver, fileMover, repository).reconcile();
+                new ArchiveReconciler(sourceDirectory, archiveDirectory, fileMover, repository).reconcile();
         logger.info("Startup reconciliation: archived={} resumable={} failed={}",
                 result.archived(), result.resumable(), result.failed());
     }
@@ -73,10 +70,10 @@ public final class Main {
     private static void archiveUntilStopped(
             Config config,
             Path sourceDirectory,
-            ArchivePathResolver pathResolver,
+            Path archiveDirectory,
             FileMover fileMover,
             ArchiveRepository repository) throws InterruptedException {
-        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, pathResolver, fileMover, repository)) {
+        try (SourceWatcher watcher = new SourceWatcher(sourceDirectory, config, archiveDirectory, fileMover, repository)) {
             watcher.start();
             // Only once started: stopping a detector that has not started shuts its listing
             // scheduler, and start() would then fail to schedule the periodic listing.

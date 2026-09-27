@@ -22,8 +22,8 @@ passing means something:
   shutdown as `FAILED`, and choosing the level of a stray file's warning by what found it
   (or warning on every listing) were all caught by `ArchiverIT`.
 
-The same-day directory race in `ArchivePathResolver` also failed its test on every run
-before the fix.
+A same-day directory race, in the path resolver that preceded
+`SatelliteImageName.archivePath`, failed its test on every run before it was fixed.
 
 Nor may a test depend on how quickly `WatchService` reports a new file. That is a
 property of the platform — instant on Linux, polled on macOS, and unreliable over
@@ -43,7 +43,7 @@ once at a fixed moment.
 | Use a JSON configuration file | `ConfigTest` (7 tests), M5 |
 | Source folder configurable | `ConfigTest.loadsTheShippedConfigurationFile`, M5 |
 | Archive folder configurable | `ConfigTest.loadsTheShippedConfigurationFile`, M5 |
-| Create `<Year>/<Month>/<Day>` if missing, zero-padded | `ArchivePathResolverTest` (3 tests), M2 |
+| Create `<Year>/<Month>/<Day>` if missing, zero-padded | `SatelliteImageNameTest.placesTheImageUnderItsZeroPaddedDate`, `SatelliteImageNameTest.placesEachSideOfAYearBoundaryUnderItsOwnYear`, `FileMoverTest.createsTheArchiveDirectoryOfANewStagingFile`, M2 |
 | Record file name, time saved and saved folder | `ArchiveRepositoryIT.recordsNameSavedTimeAndSavedFolderOnArchive`, M3 |
 | Never process the same name twice | `ArchiveRepositoryIT.primaryKeyIsAuthoritativeDedupeGuard`, M6 |
 
@@ -60,9 +60,8 @@ BUILD SUCCESS
 | Suite | Tests | Covers |
 | --- | ---: | --- |
 | `ConfigTest` | 7 | JSON loading, defaults, required fields, same-directory rejection, negative values, unknown settings |
-| `SatelliteImageNameTest` | 10 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates |
-| `ArchivePathResolverTest` | 3 | Zero-padded hierarchy, creation, year boundary, many callers racing for the same new day |
-| `FileMoverTest` | 5 | Ranged append, a range spanning several transfer calls, atomic publish, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
+| `SatelliteImageNameTest` | 12 | Valid names, leap day, wrong extension, wrong digit count, `.tmp` suffix, impossible dates, placement under the zero-padded date, year boundary |
+| `FileMoverTest` | 6 | Ranged append, a range spanning several transfer calls, atomic publish, the day directory created for new staging, staging always starting empty, offset mismatch refused, publish-over-existing refused with rollback |
 | `MainTest` | 3 | Archive directory creation with parents, missing source, non-directory path |
 | `Await` | – | Shared polling helper; no test of its own |
 | `StabilityDetectorTest` | 3 | Size and mtime comparison, absent previous snapshot, quiet-period boundary |

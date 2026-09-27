@@ -24,8 +24,9 @@ final class FileMover {
         return destination.resolveSibling(destination.getFileName() + ".tmp");
     }
 
-    /** Starts an empty staging file, discarding anything an earlier attempt left. */
+    /** Starts an empty staging file in its archive directory, discarding anything an earlier attempt left. */
     void createStaging(Path staging) throws IOException {
+        Files.createDirectories(staging.getParent());
         Files.deleteIfExists(staging);
         Files.createFile(staging);
     }

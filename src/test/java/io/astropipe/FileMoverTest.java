@@ -47,6 +47,15 @@ class FileMoverTest {
     }
 
     @Test
+    void createsTheArchiveDirectoryOfANewStagingFile() throws Exception {
+        Path staging = temporaryDirectory.resolve("2021/01/02/SAT_IMG_20210102030405006.raw.tmp");
+
+        mover.createStaging(staging);
+
+        assertEquals(0, Files.size(staging));
+    }
+
+    @Test
     void startsStagingEmptyEvenWhenAPreviousAttemptLeftBytes() throws Exception {
         Path staging = Files.writeString(temporaryDirectory.resolve("archive.raw.tmp"), "stale");
 

@@ -19,7 +19,7 @@ class ArchiveReconcilerIT {
     Path temporaryDirectory;
 
     private Path source;
-    private ArchivePathResolver resolver;
+    private Path archive;
     private final FileMover fileMover = new FileMover();
     private ArchiveRepository repository;
     private Database database;
@@ -28,11 +28,11 @@ class ArchiveReconcilerIT {
     @BeforeEach
     void setUp() throws Exception {
         source = Files.createDirectory(temporaryDirectory.resolve("source"));
-        resolver = new ArchivePathResolver(Files.createDirectory(temporaryDirectory.resolve("archive")));
+        archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
         database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
         repository = new ArchiveRepository(database);
         repository.initialize();
-        reconciler = new ArchiveReconciler(source, resolver, fileMover, repository);
+        reconciler = new ArchiveReconciler(source, archive, fileMover, repository);
     }
 
     @AfterEach
@@ -94,7 +94,10 @@ class ArchiveReconcilerIT {
         for (String fileName : fileNames) repository.claim(fileName, Instant.now());
     }
 
+    /** Where the image belongs, with its day directory in place so a test can put files there. */
     private Path destinationOf(String fileName) throws Exception {
-        return resolver.resolve(SatelliteImageName.parse(fileName));
+        Path destination = SatelliteImageName.parse(fileName).archivePath(archive);
+        Files.createDirectories(destination.getParent());
+        return destination;
     }
 }

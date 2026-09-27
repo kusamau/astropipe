@@ -36,6 +36,14 @@ record SatelliteImageName(String fileName, LocalDateTime timestamp) {
         }
     }
 
+    /** Where the image belongs in the archive: {@code <root>/<yyyy>/<MM>/<dd>/<name>}. */
+    Path archivePath(Path archiveRoot) {
+        return archiveRoot.resolve("%04d".formatted(timestamp.getYear()))
+                .resolve("%02d".formatted(timestamp.getMonthValue()))
+                .resolve("%02d".formatted(timestamp.getDayOfMonth()))
+                .resolve(fileName);
+    }
+
     static final class InvalidNameException extends IllegalArgumentException {
         InvalidNameException(String message) {
             super(message);

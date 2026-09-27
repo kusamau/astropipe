@@ -34,10 +34,10 @@ final class SourceWatcher implements AutoCloseable {
     SourceWatcher(
             Path sourceDirectory,
             Config config,
-            ArchivePathResolver pathResolver,
+            Path archiveRoot,
             FileMover fileMover,
             ArchiveRepository repository) {
-        this.transfer = new ImageTransfer(config, pathResolver, fileMover, repository);
+        this.transfer = new ImageTransfer(config, archiveRoot, fileMover, repository);
         this.detector = new SourceDetector(sourceDirectory, config.reconciliationIntervalSeconds(), this::onDetected);
     }
 

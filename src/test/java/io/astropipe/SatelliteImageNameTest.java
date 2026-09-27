@@ -32,6 +32,24 @@ class SatelliteImageNameTest {
                 SatelliteImageName.parse("SAT_IMG_20240229120000000.raw").timestamp());
     }
 
+    @Test
+    void placesTheImageUnderItsZeroPaddedDate() {
+        Path archive = Path.of("/archive");
+
+        assertEquals(archive.resolve("2021/01/02/SAT_IMG_20210102030405006.raw"),
+                SatelliteImageName.parse("SAT_IMG_20210102030405006.raw").archivePath(archive));
+    }
+
+    @Test
+    void placesEachSideOfAYearBoundaryUnderItsOwnYear() {
+        Path archive = Path.of("/archive");
+
+        assertEquals(archive.resolve("2021/12/31/SAT_IMG_20211231235959999.raw"),
+                SatelliteImageName.parse("SAT_IMG_20211231235959999.raw").archivePath(archive));
+        assertEquals(archive.resolve("2022/01/01/SAT_IMG_20220101000000000.raw"),
+                SatelliteImageName.parse("SAT_IMG_20220101000000000.raw").archivePath(archive));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "image.raw",

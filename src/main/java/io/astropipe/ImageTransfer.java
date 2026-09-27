@@ -21,16 +21,16 @@ final class ImageTransfer {
 
     private final Config config;
     private final StabilityDetector stabilityDetector;
-    private final ArchivePathResolver pathResolver;
+    private final Path archiveRoot;
     private final FileMover fileMover;
     private final ArchiveRepository repository;
     /** How many images may copy or publish at the same time. */
     private final Semaphore ioPermits;
 
-    ImageTransfer(Config config, ArchivePathResolver pathResolver, FileMover fileMover, ArchiveRepository repository) {
+    ImageTransfer(Config config, Path archiveRoot, FileMover fileMover, ArchiveRepository repository) {
         this.config = config;
         this.stabilityDetector = new StabilityDetector(config.quietPeriodMillis());
-        this.pathResolver = pathResolver;
+        this.archiveRoot = archiveRoot;
         this.fileMover = fileMover;
         this.repository = repository;
         this.ioPermits = new Semaphore(config.workerPoolSize());
@@ -54,7 +54,7 @@ final class ImageTransfer {
         // The ledger row is in progress from here on: a failure has to close it out, a stop must not.
         Path staging = null;
         try {
-            Path destination = pathResolver.resolve(image);
+            Path destination = image.archivePath(archiveRoot);
             staging = fileMover.stagingPath(destination);
             transfer(source, fileName, destination, staging, detection);
         } catch (ClosedByInterruptException | InterruptedException stopped) {
