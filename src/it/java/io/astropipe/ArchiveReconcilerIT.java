@@ -1,0 +1,102 @@
+package io.astropipe;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class ArchiveReconcilerIT {
+    @TempDir
+    Path temporaryDirectory;
+
+    private Path source;
+    private Path archive;
+    private ArchiveRepository repository;
+    private Database database;
+    private ArchiveReconciler reconciler;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        source = Files.createDirectory(temporaryDirectory.resolve("source"));
+        archive = Files.createDirectory(temporaryDirectory.resolve("archive"));
+        database = new Database("jdbc:sqlite:" + temporaryDirectory.resolve("archive.db"));
+        repository = new ArchiveRepository(database);
+        repository.initialize();
+        reconciler = new ArchiveReconciler(source, archive, repository);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (database != null) database.close();
+    }
+
+    @Test
+    void adoptsAPublishedFileAndRemovesAnIdenticalLeftoverSource() throws Exception {
+        String published = "SAT_IMG_20240101120000000.raw";
+        String duplicated = "SAT_IMG_20240101120000001.raw";
+        claim(published, duplicated);
+        Files.writeString(destinationOf(published), "complete");
+        Files.writeString(destinationOf(duplicated), "complete");
+        Files.writeString(source.resolve(duplicated), "complete");
+
+        assertEquals(new ArchiveReconciler.Result(2, 0, 0), reconciler.reconcile());
+        assertFalse(Files.exists(source.resolve(duplicated)), "identical leftover source must be removed");
+        assertTrue(repository.inProgressFileNames().isEmpty());
+    }
+
+    @Test
+    void discardsAnIncompletePublicationRatherThanLeaveATruncatedImage() throws Exception {
+        String fileName = "SAT_IMG_20240101120000000.raw";
+        claim(fileName);
+        Path destination = Files.writeString(destinationOf(fileName), "abcd");
+        Files.writeString(source.resolve(fileName), "abcdefgh");
+
+        assertEquals(new ArchiveReconciler.Result(0, 1, 0), reconciler.reconcile());
+        assertFalse(Files.exists(destination), "a short destination is not a complete image");
+        assertEquals(List.of(fileName), repository.inProgressFileNames());
+    }
+
+    @Test
+    void discardsStagingLeftBehindAndKeepsTheRowResumable() throws Exception {
+        String fileName = "SAT_IMG_20240101120000000.raw";
+        claim(fileName);
+        Path staging = Files.writeString(FileMover.stagingPath(destinationOf(fileName)), "abcd");
+        Files.writeString(source.resolve(fileName), "abcdefgh");
+
+        assertEquals(new ArchiveReconciler.Result(0, 1, 0), reconciler.reconcile());
+        assertFalse(Files.exists(staging), "staging never survives a restart");
+        assertEquals(List.of(fileName), repository.inProgressFileNames());
+    }
+
+    @Test
+    void failsRowsThatCannotBeRecovered() throws Exception {
+        String vanished = "SAT_IMG_20240101120000000.raw";
+        String shrunk = "SAT_IMG_20240101120000001.raw";
+        claim(vanished, shrunk);
+        Files.writeString(destinationOf(shrunk), "abcdefgh");
+        Files.writeString(source.resolve(shrunk), "abcd");
+
+        assertEquals(new ArchiveReconciler.Result(0, 0, 2), reconciler.reconcile());
+        assertTrue(repository.inProgressFileNames().isEmpty());
+    }
+
+    private void claim(String... fileNames) {
+        for (String fileName : fileNames) repository.claim(fileName, Instant.now());
+    }
+
+    /** Where the image belongs, with its day directory in place so a test can put files there. */
+    private Path destinationOf(String fileName) throws Exception {
+        Path destination = SatelliteImageName.parse(fileName).archivePath(archive);
+        Files.createDirectories(destination.getParent());
+        return destination;
+    }
+}

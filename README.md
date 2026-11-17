@@ -1,1 +1,265 @@
-# astropipe
+# Astropipe
+
+Astropipe watches a local source directory for satellite images named
+`SAT_IMG_<yyyyMMddHHmmssSSS>.raw`, moves each complete file into an
+`<archiveDir>/<Year>/<Month>/<Day>` hierarchy, and records each image in an
+SQLite ledger and every operation in a log file.
+
+## Build and run
+
+Requirements: Linux, Java 25 or newer, Maven 3.8 or newer.
+
+Maven itself must run on JDK 25. It follows `JAVA_HOME`, which can point to a
+different JDK than the `java` on your `PATH`, so check with `mvn -v`; on an
+older JDK the build stops at once and says so.
+
+`sqlite-jdbc` carries a native library for each of 20 platforms, which is most of
+the packaged jar. The build keeps only 64-bit Linux and macOS — every machine this
+is built, reviewed or deployed on — which takes the jar from 15 MB to about 6 MB.
+Running anywhere else means widening the `org.xerial:sqlite-jdbc` filter in
+`pom.xml`.
+
+```bash
+mvn clean package
+./scripts/run.sh
+```
+
+`scripts/run.sh` creates `data/source`, `data/archive` and `logs`, and starts the
+jar built by `mvn clean package`. To run it by hand:
+
+```bash
+java -jar target/astropipe.jar [path/to/config.json]
+```
+
+The configuration file defaults to `./config.json`.
+
+## Configuration
+
+All settings live in one JSON file. Only `sourceDir` and `archiveDir` are
+required; anything else falls back to the default shown here.
+
+```json
+{
+  "sourceDir": "./data/source",
+  "archiveDir": "./data/archive",
+  "databaseUrl": "jdbc:sqlite:./data/archive.db",
+
+  "pollIntervalMillis": 250,
+  "quietPeriodMillis": 250,
+  "reconciliationIntervalSeconds": 30,
+
+  "workerPoolSize": 2
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `sourceDir` | Watched directory. Must already exist and be readable and writable. |
+| `archiveDir` | Archive root. Created with its parents if missing. |
+| `databaseUrl` | JDBC URL of the SQLite ledger. |
+| `pollIntervalMillis` | How often a tracked file is re-sampled for changes. |
+| `quietPeriodMillis` | How long size and modification time must hold still before publication. Must exceed any normal pause between producer writes. |
+| `reconciliationIntervalSeconds` | Interval of the directory listing that backs up `WatchService`. Without `WatchService` the listing runs every second instead. |
+| `workerPoolSize` | How many images may copy at the same time. |
+
+Startup fails with a specific message on a blank required directory, a source
+and archive that resolve to the same path, a negative tuning value, an unknown
+setting, or an inaccessible directory.
+
+Logs go to the console and to `logs/astropipe.log`, rotated daily and kept for
+14 days.
+
+If startup warns `WatchService unavailable … User limit of inotify instances
+reached`, other programs have used up the per-user inotify instances (128 by
+default on Linux). Astropipe still works, finding new files by listing the
+source directory every second; `sudo sysctl fs.inotify.max_user_instances=1024`
+brings back immediate detection.
+
+An entry the pipeline refuses — a name that is not `SAT_IMG_<timestamp>.raw`, or
+one whose 17 digits are not a real instant — is left where it is and never
+claimed, so every later listing finds it again. It is reported at `WARN` the
+first time the run meets it, whether a watch event or a listing found it, and at
+`DEBUG` on every later listing. An operator therefore hears about a stray file
+once per run rather than once per sweep for as long as the process lives.
+
+## Input data
+
+Test images come from a separate generator application, which has its own build
+and release lifecycle; Astropipe neither packages nor invokes it. Its producer
+contract is append-only: it writes into `<out>/.staging` and atomically renames
+the finished file into the source directory, and existing byte ranges are never
+rewritten.
+
+Anything that honours that contract works. The simplest manual equivalent is:
+
+```bash
+mkdir -p data/source/.staging
+dd if=/dev/urandom of=data/source/.staging/img bs=1M count=100 status=none
+mv data/source/.staging/img data/source/SAT_IMG_20210714102730046.raw
+```
+
+## Tests
+
+```bash
+mvn test     # 44 unit tests, no database connection
+mvn verify   # adds 18 SQLite-backed integration tests under src/it/java
+```
+
+See [VALIDATION.md](VALIDATION.md) for the test cases and observed results.
+
+## The code
+
+Twelve classes in one package. They are kept package-private wherever possible —
+only `Main` and `Config` are public — so the compiler enforces that nothing here
+is reachable from outside. That is worth more at this size than a directory per
+layer would be, but it does mean an alphabetical file listing scatters related
+things, so here is the map:
+
+| Role | Class |
+| --- | --- |
+| Entry point and wiring | `Main` |
+| Configuration | `Config` |
+| Noticing files | `SourceDetector` |
+| Reacting to each watch event | `EventKindHandler` |
+| Handing each new image to a transfer of its own, and stopping them | `SourceWatcher` |
+| Following one image from detection to the archive | `ImageTransfer` |
+| Startup recovery | `ArchiveReconciler` |
+| Naming and placement | `SatelliteImageName` (a parsed name and where it belongs) |
+| Knowing a file is finished | `StabilityDetector` |
+| Moving bytes | `FileMover` |
+| The archive ledger | `ArchiveRepository` |
+| JDBC, with no domain knowledge | `Database` |
+
+At startup `ArchiveReconciler` resolves whatever the previous run left in
+progress. Then `SourceDetector` reports every regular file it finds, and
+`SourceWatcher` runs `ImageTransfer.archive` for each image on a virtual thread
+of its own, which claims it and drives it from staging to publication.
+
+## Design decisions
+
+### Incremental archive-side staging
+
+Astropipe is optimized for very large append-only files whose source and archive
+normally live on different filesystems. Copying begins as soon as a file is
+detected instead of waiting for the producer to finish: available bytes are
+written to `<destination>.tmp` on the archive filesystem, and each time the
+source grows the new bytes are appended. A slow producer therefore overlaps its
+writing with Astropipe's copying rather than being copied only after it stops.
+
+**Staging is valid only for the run that created it.** A restart discards
+whatever a previous attempt left behind and copies again from the beginning.
+That is the deliberate trade behind this design: it removes the persisted
+checkpoint, the byte-for-byte resume-boundary validation and the two-phase copy
+state, at the cost of re-copying a large file that was interrupted mid-transfer.
+The source is the only authority, and it is never removed until its image has
+been published.
+
+A source that loses bytes it has already handed over violates the append-only
+contract; the row becomes `FAILED` and both artifacts are preserved.
+
+### Detection and complete files
+
+`SourceDetector` owns this and nothing else: it reports every regular file in the
+source directory, with how it was found, and leaves interpreting the name to the
+pipeline. `WatchService` supplies low-latency `ENTRY_CREATE` events; modifications
+are not watched, because once a file has been reported the pipeline follows it by
+polling. `WatchService` cannot recover events missed while the process was stopped and may
+overflow, so a startup listing and a periodic reconciliation listing run
+alongside it. An explicit `OVERFLOW` schedules an immediate listing. If
+`WatchService` is unavailable altogether, detection falls back to listing alone,
+every second.
+
+Keeping detection separate means it is testable on its own: `SourceDetectorTest`
+drives it with a plain callback and never opens a database.
+
+Creation does not mean a producer has closed the file. The image's transfer
+samples source size and last-modified time every poll interval. Growth is
+appended to staging at once, after checking that the source has not shrunk; an
+unchanged source starts the quiet period. Only after the complete quiet period
+does Astropipe atomically rename staging to the final destination and remove the
+source.
+
+### Correctness under failure
+
+The SQLite primary key on `file_name` is the authoritative deduplication guard:
+a name that is already `ARCHIVED` or `FAILED` is never processed again. A row is
+`IN_PROGRESS` from the moment the file is claimed until publication sets
+`ARCHIVED` along with the saved time and saved folder, or a contract violation or
+unrecoverable I/O error sets `FAILED`. Stopping is neither: a transfer interrupted
+by shutdown leaves its row `IN_PROGRESS` for the next start. Copy progress is
+deliberately not recorded, because no staging file outlives the process that
+wrote it.
+
+On restart, `ArchiveReconciler` compares every in-progress row against the
+filesystem. A surviving source is the authority: any staging file is deleted, and
+a published destination shorter than its source is deleted too rather than leave
+a truncated image under a complete name. The row stays in progress and the image
+is copied again. Only a fully published destination, a source that shrank, or the
+loss of both copies is terminal.
+
+The only index is partial and covering: it holds in-progress rows alone, which are
+transient, so the startup lookup stays instant however large the archive grows.
+
+`Database` owns the single SQLite connection and the JDBC ceremony; it knows
+nothing about archiving. It opens in WAL mode with `synchronous=NORMAL` and
+serialises the handful of tiny statements the pipeline issues, which is all
+SQLite would allow concurrently anyway. `ArchiveRepository` holds only the ledger
+itself, and each state change is one statement whose `WHERE` clause carries the
+rule it enforces, so the guard is applied by the database rather than by a read
+followed by a write.
+
+### Concurrency and backpressure
+
+One thread blocks in the watch loop, one scheduled thread runs the directory
+listings, and **each image in flight has a virtual thread of its own**. That
+thread follows the image from first detection to the archive as plain sequential
+code — claim, stage, append while the producer writes, publish once the source
+has held still — so everything it knows about the image lives in its own local
+variables. Images share only the set of names in flight (which makes the first
+sighting of a name one atomic step), the copy permits, and the ledger.
+
+After first detection no watch event is awaited: between checks a transfer
+sleeps for the poll interval. The quiet period is an absence of change that no
+event could announce, and events can be lost anyway. A sleeping virtual thread
+holds no platform thread, so a waiting image costs a little memory and one check
+per poll interval. For the same reason only `ENTRY_CREATE` is watched.
+
+Copying takes one of `workerPoolSize` permits, two by default, because copy
+parallelism depends on the source and archive devices. The images waiting for a
+permit are the queue. Publication takes none: it is a rename, and queued behind
+the copies it would hold every copied image, and its source, until the whole
+backlog had been copied.
+
+Java 25 is required because on 21 a virtual thread blocking inside a
+`synchronized` method, as every `Database` method is, pins the platform thread
+carrying it (fixed by JEP 491 in Java 24).
+
+Shutdown interrupts transfers instead of waiting for them. An interrupted
+transfer leaves its row `IN_PROGRESS`, never `FAILED`, and startup reconciliation
+copies the image again from the start, which is all waiting out a long copy
+would have achieved.
+
+## What I deliberately did not build
+
+- Distributed coordination: the exercise targets one local process and disk.
+- Resuming an interrupted copy across a restart: recopying from the source is simpler and the source is still there.
+- Full-file checksums: the append-only contract plus an atomic publish is the integrity story.
+- Automatic retries: failed rows stay explicit rather than hiding policy in a backoff loop.
+- A metrics endpoint: logs and `VALIDATION.md` are sufficient here.
+- A framework: the application is plain Java over `java.nio`, JDBC and Jackson.
+- NFS/CIFS specialization: periodic reconciliation limits missed-event risk, but remote storage needs separate operational testing.
+
+## How I built this
+
+I built Astropipe together with an AI coding assistant, Claude Code, and I'd
+rather say so openly than leave anyone guessing. I worked with it the way I'd
+work with an experienced colleague: we talked the design through, it drafted and
+reworked much of the code under my direction, and it ran the tests and
+measurements behind `VALIDATION.md`.
+
+The decisions are mine. I set the direction, pushed back when a suggestion didn't
+convince me, and kept asking questions until I could explain every part of the
+code myself, the threading model above all. It also turned out to be a great way
+to learn. The history is open about it too, since most commits carry a
+`Co-Authored-By` trailer, and I'm happy to walk through any part of the code in
+person.
